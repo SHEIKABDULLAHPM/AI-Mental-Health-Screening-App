@@ -1,0 +1,52 @@
+{
+  "realm": "mindease",
+  "enabled": true,
+  "displayName": "MindEase",
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "verifyEmail": true,
+  "clients": [
+    {
+      "clientId": "mindease-app",
+      "name": "MindEase Mobile & Web",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": true,
+      "redirectUris": [
+        "http://localhost:*/*",
+        "http://10.0.2.2:*/*"
+      ],
+      "webOrigins": [
+        "http://localhost:*",
+        "http://10.0.2.2:*"
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "user",
+        "description": "Standard authenticated user",
+        "composite": false
+      },
+      {
+        "name": "clinician",
+        "description": "Licensed mental-health professional",
+        "composite": false
+      },
+      {
+        "name": "admin",
+        "description": "Application administrator",
+        "composite": false
+      }
+    ]
+  },
+  "scopeMappings": []
+}

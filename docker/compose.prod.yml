@@ -1,0 +1,83 @@
+# ============================================================================
+# MindEase - Production-ready overlay
+# Run from repo root:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# TLS / edge proxying is handled by an external reverse proxy in front of
+# Keycloak; the realm stays at /realms/<realm> so JWKS URIs stay consistent
+# (the backend validates tokens against http://keycloak:8080/realms/<realm>/...).
+# ============================================================================
+
+name: mindease-prod
+
+services:
+
+  keycloak:
+    # Production entry: optimized Quarkus build with realm import at bootstrap.
+    command: start --import-realm
+    environment:
+      KC_HEALTH_ENABLED: "true"
+    # Keycloak in prod mode cold-builds its Quarkus layer on first boot; give it
+    # generous grace before the (path-free) health probe blocks dependents.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /realms/mindease HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -n1 <&3 | grep -q "200 OK"'
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      LOGGING_LEVEL_COM_MINDEASE: INFO
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "1.0"
+    restart: always
+
+  ai-service:
+    image: ${AI_SERVICE_IMAGE:-mindease/ai-service:prod}
+    environment:
+      APP_ENV: production
+      AI_LOG_LEVEL: INFO
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+    restart: always
+
+  mongo:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    restart: always
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    restart: always
+
+  rabbitmq:
+    restart: always
+
+  qdrant:
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    restart: always
+
+  minio:
+    restart: always

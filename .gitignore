@@ -1,51 +1,66 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
+# ---- Environment & secrets ----
+.env
+.env.local
+*.env
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+*.secret
+
+# ---- IDE / editors ----
+.idea/
+.vscode/
+*.iml
 *.swp
 .DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
 
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
+# ---- OS ----
+Thumbs.db
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# ---- Flutter / Dart (app/) ----
+app/.dart_tool/
+app/.packages
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.pub-cache/
+app/.pub/
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/ephemeral/
+app/android/.gradle/
+app/android/app/.cxx/
+app/.idea/
+app/*.iml
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-build/
+# ---- Java / Spring Boot (backend/) ----
+backend/target/
+backend/.mvn/
+backend/*.log
+backend/.classpath
+backend/.project
+backend/.settings/
+backend/.factorypath
+backend/mvnw
+backend/mvnw.cmd
 
-# Symbolication related
-app.*.symbols
+# ---- Python / AI service (ai-service/) ----
+ai-service/.venv/
+ai-service/venv/
+ai-service/__pycache__/
+ai-service/**/__pycache__/
+ai-service/*.pyc
+ai-service/.pytest_cache/
+ai-service/.mypy_cache/
+ai-service/.ruff_cache/
+ai-service/*.egg-info/
 
-# Obfuscation related
-app.*.map.json
+# ---- Runtime artifacts ----
+*.log
+logs/
+tmp/
 
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-
-# Windows
-.windows/
-
-# macOS
-.macos/
+# ---- Docker ----
+docker-data/

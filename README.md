@@ -1,49 +1,116 @@
-# MindEase — AI-Based Mental Health Screening and Support
+# MindEase — AI Mental Health Screening & Support Guidance
 
-A Flutter application for evidence-based mental health screening (PHQ-9, GAD-7, PSS, WHO-5) with AI-driven wellness guidance. It runs entirely client-side; there is no backend service.
+A full-stack, containerized platform for evidence-based mental health
+screening with AI-driven, evidence-grounded support guidance.
 
-## Run with Docker
+- **Mobile app:** Flutter (Android) — feature-based Clean Architecture
+- **Backend:** Spring Boot 3 (modular, `/api/v1` versioned)
+- **AI service:** Python/FastAPI (emotion, risk, RAG, recommendation, LLM)
+- **Data:** MongoDB · Redis · RabbitMQ · Qdrant · MinIO
+- **Auth:** Keycloak (OIDC)
 
-The project is fully containerized. A single `web` service builds the Flutter app and serves it with nginx.
+Everything runs through **Docker Compose**. Nothing is installed on the host
+except Docker; databases and internal services are kept off the public
+interface.
 
-### Prerequisites
+---
 
-- Docker Engine 24+ with Docker Compose v2 (`docker compose version`)
-
-### Quick start
+## Quick start (one command)
 
 ```bash
-# 1. Configure environment (optional)
-cp .env.example .env
-
-# 2. Build and start
+cp .env.example .env        # then edit real secrets inside .env
 docker compose up -d --build
+```
 
-# 3. Verify
+The root `docker-compose.yml` is the default entry point; it merges the shared
+base definitions with the development overlay and reads `docker/.env`
+automatically. Or use the helper: `./scripts/start.sh`.
+
+> The `.env.example` ships with **dev-only placeholders**. Never use them in
+> production. For production run from the root:
+> `docker compose -f docker-compose.prod.yml up -d --build`.
+
+## Verify everything is healthy
+
+```bash
 docker compose ps
 ```
 
-Open <http://localhost:8080>. The container is healthy when `docker compose ps` shows `healthy` (the container self-checks `/healthz`).
-
-### Stopping and rebuilding
+All services should report `healthy` (every container ships a health check).
+Spot-check the API:
 
 ```bash
-docker compose down          # stop and remove the container/network
-docker compose up -d --build # rebuild after code changes
+curl http://localhost:8080/actuator/health          # backend + infra health
+curl http://localhost:8000/api/v1/risk/assess \
+  -H 'Content-Type: application/json' \
+  -d '{"screening_score":{"phq9":20},"contextual_flags":["hopeless"]}'
 ```
 
-### Configuration (.env)
+## Service matrix
 
-| Variable             | Default | Description                                      |
-| -------------------- | ------- | ------------------------------------------------ |
-| `WEB_PORT`           | `8080`  | Host port mapped to the container's nginx (80).  |
-| `WEB_APP_BASE_PATH`  | `/`     | Deploy path prefix, e.g. `/mindease/` under a sub-path. |
-| `FLUTTER_WEB_USE_SKIA`| `true`  | Force the Skia renderer for Flutter web.          |
+| Service     | Container         | Host port (dev)        | Notes                              |
+| ----------- | ----------------- | ---------------------- | ---------------------------------- |
+| Backend API | `mindease-backend`| `localhost:8080`      | Spring Boot, `/api/v1`, `/actuator`|
+| AI service  | `mindease-ai-service`| `localhost:8000`    | FastAPI, `/api/v1`, `/health`      |
+| Keycloak    | `mindease-keycloak`| `localhost:8081`      | Admin console at `/admin`          |
+| MongoDB     | `mindease-mongo`  | dev-only `127.0.0.1:27017` | primary database                 |
+| Redis       | `mindease-redis`  | dev-only `127.0.0.1:6379` | cache                            |
+| RabbitMQ    | `mindease-rabbitmq`| dev-only `5672/15672`  | async/AI jobs                      |
+| Qdrant      | `mindease-qdrant` | dev-only `127.0.0.1:6333` | RAG vector store                 |
+| MinIO       | `mindease-minio`  | dev-only `9000/9001`    | object storage                     |
 
-### Details
+**Security:** MongoDB, Redis, RabbitMQ, Qdrant and MinIO are *not* published on
+the `internal` Docker network. Dev-only debug ports are bound strictly to
+`127.0.0.1`; the production overlay exposes none of them. Only the backend, AI
+service and Keycloak are reachable from the host on the `frontend` network.
 
-- **Multi-stage build**: `ghcr.io/cirruslabs/flutter:stable` builds the web bundle; `nginx:1.27-alpine` serves it.
-- **Non-root runtime**: the container drops to the `nginx` user and runs with a read-only root filesystem (`tmpfs` for `/tmp`).
-- **Restart policy**: `unless-stopped`; anonymous volumes persist nginx cache/run state.
-- **SPA routing**: unknown routes fall back to `index.html`.
-- **Healthcheck**: `GET /healthz` returns `200` when the app is serving.
+## Stop
+
+```bash
+docker compose down
+# add -v to also delete named volumes (data):
+docker compose down -v
+```
+
+## Rebuild after code changes
+
+```bash
+docker compose up -d --build        # or ./scripts/rebuild.sh
+```
+
+## View logs
+
+```bash
+docker compose logs -f backend ai-service
+```
+
+## Environments & secrets
+
+- Root `.env` carries all configuration; copy from `.env.example` and change
+  every `change-me-*` value and `sk-change-me` key.
+- Each service folder also ships a `.env.example` (see `ai-service/.env.example`).
+- Never commit the real `.env` (ignored by `.gitignore`).
+
+| File            | Purpose                                                    |
+|-----------------|------------------------------------------------------------|
+| `docker-compose.yml` | Default dev entry: merges `base` + `dev`.              |
+| `docker-compose.prod.yml` | Prod entry: merges `base` + `prod`.                 |
+| `docker/compose.base.yml` | Shared definitions. Never run alone.                  |
+| `docker/compose.dev.yml`  | Dev: debug ports on `127.0.0.1`, debug logging.       |
+| `docker/compose.prod.yml` | Prod: no infra ports, resource limits, restart policies. |
+
+## Folder map
+
+```
+├── app/                  # Flutter mobile client
+├── backend/              # Spring Boot API (feature modules)
+├── ai-service/           # FastAPI AI/RAG/LLM service
+├── docker/               # base/dev/prod compose + assets
+├── docs/                 # architecture notes
+└── scripts/              # host-side helpers
+```
+
+## Documentation
+
+- See [docs/architecture.md](docs/architecture.md) for the full architecture,
+  data flow and extension guide.

@@ -1,0 +1,8 @@
+# ============================================================================
+# MindEase - production entry point.
+# `docker compose -f docker-compose.prod.yml up -d --build` (or
+# `docker compose --profile prod up`). Merges base + prod overlay.
+# ============================================================================
+include:
+  - docker/compose.base.yml
+  - docker/compose.prod.yml

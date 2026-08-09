@@ -1,0 +1,43 @@
+# ============================================================================
+# MindEase - Development overlay
+# Adds localhost-only debug ports for infra, hot reload, and dev conveniences.
+# Run from repo root:
+#   docker compose -f docker/compose.base.yml -f docker/compose.dev.yml up -d --build
+# ============================================================================
+
+name: mindease-dev
+
+services:
+
+  # Debug access bound to localhost ONLY - never 0.0.0.0.
+  mongo:
+    ports:
+      - "127.0.0.1:27017:27017"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  rabbitmq:
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  qdrant:
+    ports:
+      - "127.0.0.1:6333:6333"
+
+  minio:
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      LOGGING_LEVEL_COM_MINDEASE: DEBUG
+
+  ai-service:
+    environment:
+      APP_ENV: development
+      AI_LOG_LEVEL: DEBUG

@@ -1,0 +1,77 @@
+# ============================================================================
+# MindEase backend - application configuration.
+# Real values are injected via environment variables (see compose.base.yml).
+# Profiles: dev (local/debug) and prod (defaults safe).
+# ============================================================================
+spring:
+  application.name: mindease-backend
+  profiles.active: ${SPRING_PROFILES_ACTIVE:dev}
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://mindease:change-me@mongo:27017/mindease?authSource=admin}
+      auto-index-creation: true
+
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      timeout: 2s
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:rabbitmq}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:mindease}
+    password: ${RABBITMQ_PASSWORD:change-me}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    listener.simple.retry.enabled: true
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${JWT_ISSUER:http://localhost:8081/realms/mindease}
+          jwk-set-uri: ${JWT_JWKS_URI:http://keycloak:8080/realms/mindease/protocol/openid-connect/certs}
+
+# ---------------------------------------------------------------------------
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+# ---------------------------------------------------------------------------
+management:
+  endpoints.web.exposure.include: health,info,metrics,prometheus
+  endpoint.health.show-details: always
+  health:
+    mongo.enabled: true
+    redis.enabled: true
+    rabbit.enabled: true
+    readiness-state.enabled: true
+
+# ---------------------------------------------------------------------------
+# External integrations
+mindease:
+  ai:
+    base-url: ${AI_SERVICE_URL:http://ai-service:8000/api/v1}
+    connect-timeout: 5s
+    read-timeout: 60s
+  qdrant:
+    url: ${QDRANT_URL:http://qdrant:6333}
+  minio:
+    url: ${MINIO_URL:http://minio:9000}
+    access-key: ${MINIO_ACCESS_KEY:mindease}
+    secret-key: ${MINIO_SECRET_KEY:change-me}
+    bucket: ${MINIO_BUCKET:mindease-files}
+  rabbitmq:
+    queue-ai-tasks: ${RABBITMQ_QUEUE_AI_TASKS:ai_tasks}
+
+# ---------------------------------------------------------------------------
+logging:
+  level:
+    root: INFO
+    com.mindease: ${LOGGING_LEVEL_COM_MINDEASE:DEBUG}
+  pattern.console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
+
+---
+spring.config.activate.on-profile: prod
+logging.level.com.mindease: INFO

@@ -1,46 +1,11 @@
-# MindEase — Docker Compose configuration
-# Brings up the Flutter web app behind nginx on a single service.
+# ============================================================================
+# MindEase - DEFAULT entry point (development stack).
+# `docker compose up -d --build` from the repo root uses this file.
+# It merges the shared base definitions with the dev overlay.
+# ============================================================================
 
-services:
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        # Deploy path prefix if not served at the root (e.g. /mindease/)
-        WEB_APP_BASE_PATH: ${WEB_APP_BASE_PATH:-/}
-    image: mindease-web:latest
-    container_name: mindease-web
-    restart: unless-stopped
-    ports:
-      - "${WEB_PORT:-8080}:80"
-    environment:
-      WEB_APP_BASE_PATH: ${WEB_APP_BASE_PATH:-/}
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    # Read-only root filesystem + anonymous scratch volume (nginx needs writable
-    # /tmp and /var/run at minimum to drop privileges safely).
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
-    volumes:
-      - type: volume
-        source: nginx-cache
-        target: /var/cache/nginx
-      - type: volume
-        source: nginx-run
-        target: /var/run
-    networks:
-      - mindease-net
+name: mindease
 
-volumes:
-  nginx-cache:
-  nginx-run:
-
-networks:
-  mindease-net:
-    driver: bridge
+include:
+  - docker/compose.base.yml
+  - docker/compose.dev.yml

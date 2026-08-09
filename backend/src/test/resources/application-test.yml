@@ -1,0 +1,25 @@
+# Test profile: no live infra requirements so the context can load in CI.
+spring:
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/test
+    redis:
+      host: localhost
+      port: 6379
+      password:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+mindease:
+  ai:
+    base-url: http://localhost:8000
+  qdrant:
+    url: http://localhost:6333
+  minio:
+    url: http://localhost:9000
+    access-key: test
+    secret-key: test
+    bucket: test-bucket

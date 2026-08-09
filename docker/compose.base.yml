@@ -1,0 +1,253 @@
+# ============================================================================
+# MindEase - Base Docker Compose (shared by dev & prod entry points)
+# The project `name` is declared in the *entry* file (docker-compose.yml or
+# docker-compose.prod.yml) so dev and prod never share containers/networks.
+# All values come from the root .env file (cp .env.example .env).
+# Internal services (databases, queues, vector, storage) are NEVER published
+# to the host; they only exist on the `internal` Docker network.
+# ============================================================================
+
+x-environment: &common-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  TZ: ${TIMEZONE:-UTC}
+  SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+
+services:
+
+  # --------------------------------------------------------------- MongoDB
+  mongo:
+    image: mongo:7.0
+    container_name: mindease-mongo
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-mindease}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set in .env}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE:-mindease}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet",
+             "mongodb://${MONGO_INITDB_ROOT_USERNAME:-mindease}:${MONGO_INITDB_ROOT_PASSWORD:?set in .env}@localhost:27017/mindease?authSource=admin",
+             "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # ------------------------------------------------------------------ Redis
+  redis:
+    image: redis:7-alpine
+    container_name: mindease-redis
+    restart: unless-stopped
+    networks: [internal]
+    command: >
+      sh -c 'redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set in .env}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ------------------------------------------------------------ RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: mindease-rabbitmq
+    restart: unless-stopped
+    networks: [internal]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-mindease}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?set in .env}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ----------------------------------------------------------- Qdrant (RAG)
+  qdrant:
+    image: qdrant/qdrant:v1.9.7
+    container_name: mindease-qdrant
+    restart: unless-stopped
+    networks: [internal]
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf "GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -n1 <&3 | grep -q "200 OK"'
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
+
+  # ------------------------------------------------------------- MinIO (S3)
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: mindease-minio
+    restart: unless-stopped
+    networks: [internal]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-mindease}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ------------------------------------------------------------ MinIO setup
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: mindease-minio-init
+    restart: "no"
+    networks: [internal]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing local/$$MINIO_BUCKET &&
+      mc anonymous set none local/$$MINIO_BUCKET &&
+      echo 'MinIO ready.' ;
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-mindease}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mindease-files}
+
+  # ---------------------------------------------------------------- Keycloak
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: mindease-keycloak
+    restart: unless-stopped
+    networks: [frontend]
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set in .env}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./base/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /realms/mindease HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -n1 <&3 | grep -q "200 OK"'
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 90s
+
+  # ------------------------------------------------------------- Backend API
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: mindease-backend
+    restart: unless-stopped
+    networks: [frontend, internal]
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    environment:
+      <<: *common-env
+      SERVER_PORT: 8080
+      SPRING_DATA_MONGODB_URI: ${MONGODB_URI:?set in .env}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?set in .env}
+      SPRING_RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      SPRING_RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-mindease}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?set in .env}
+      AI_SERVICE_URL: http://ai-service:8000/api/v1
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      MINIO_URL: ${MINIO_URL:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-mindease}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mindease-files}
+      JWT_ISSUER: ${JWT_ISSUER:?set in .env}
+      JWT_JWKS_URI: ${JWT_JWKS_URI:?set in .env}
+      RABBITMQ_QUEUE_AI_TASKS: ${RABBITMQ_QUEUE_AI_TASKS:-ai_tasks}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/actuator/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  # ------------------------------------------------------------- AI service
+  ai-service:
+    image: ${AI_SERVICE_IMAGE:-mindease/ai-service:local}
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+    container_name: mindease-ai-service
+    restart: unless-stopped
+    networks: [frontend, internal]
+    environment:
+      <<: *common-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set in .env}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-mindease}
+      RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?set in .env}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-mindease_chunks}
+      REDIS_URI: redis://:${REDIS_PASSWORD:?set in .env}@redis:6379
+    ports:
+      - "${AI_SERVICE_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+networks:
+  frontend:
+    name: mindease-frontend
+    driver: bridge
+  internal:
+    name: mindease-internal
+    driver: bridge
+    internal: true
+
+volumes:
+  mongo-data:
+    name: mindease-mongo-data
+  redis-data:
+    name: mindease-redis-data
+  rabbitmq-data:
+    name: mindease-rabbitmq-data
+  qdrant-data:
+    name: mindease-qdrant-data
+  minio-data:
+    name: mindease-minio-data
+  keycloak-data:
+    name: mindease-keycloak-data

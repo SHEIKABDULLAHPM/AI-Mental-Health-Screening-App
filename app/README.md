@@ -1,4 +1,4 @@
-# MindEase Flutter application
+# Synora Flutter application
 
 Clean-architecture, feature-based Flutter client for MindEase.
 

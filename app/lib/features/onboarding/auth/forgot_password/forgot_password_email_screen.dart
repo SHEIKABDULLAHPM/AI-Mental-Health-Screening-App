@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/core/utils/validators.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
@@ -34,17 +36,32 @@ class _ForgotPasswordEmailScreenState extends State<ForgotPasswordEmailScreen> {
     setState(() => _emailError = e);
     if (e != null) return;
 
-    setState(() => _busy = true);
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
-    if (_email.text.contains('nouser')) {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      // The backend returns the same success response for unknown emails so
+      // accounts cannot be enumerated. Any failure here is transport/server.
+      await mindeaseApi.forgotPassword(_email.text.trim());
+      if (!mounted) return;
+      setState(() => _busy = false);
+      context.go(
+        '/forgot-password/otp?email=${Uri.encodeComponent(_email.text.trim())}',
+      );
+    } on Failure catch (error) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = 'No account found for this email address.';
+        _error = error.message;
       });
-      return;
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Unable to send the code right now. Please try again.';
+      });
     }
-    context.go('/forgot-password/otp');
   }
 
   @override

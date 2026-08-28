@@ -65,9 +65,9 @@ class ReviewStep extends StatelessWidget {
             onEdit: () =>
                 controller.jumpToStep(ScreeningController.lifestyleIndex),
             rows: [
-              for (final q in lifestyleQuestions)
+              for (final q in controller.lifestyleQuestions)
                 (
-                  _labelFor(q.field),
+                  q.label,
                   _valueFor(q, c.lifestyle[q.field]),
                 ),
             ],
@@ -76,44 +76,44 @@ class ReviewStep extends StatelessWidget {
           _Section(
             icon: Icons.sentiment_satisfied_alt_outlined,
             color: theme.colorScheme.primary,
-            title: 'PHQ-9 · Depressive symptoms',
+            title: c.catalog.phqTitle,
             onEdit: () => controller.jumpToStep(ScreeningController.phqIndex),
             rows: [
               ('Questions answered', '${_answered(c.phq)} / ${c.phq.length}'),
-              ('Score', '${_total(c.phq)} / 27'),
+              ('Score', '${_total(c.phq)} / ${_maxScore(c.phqItems)}'),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
           _Section(
             icon: Icons.spa_outlined,
             color: theme.colorScheme.tertiary,
-            title: 'GAD-7 · Anxiety',
+            title: c.catalog.gadTitle,
             onEdit: () => controller.jumpToStep(ScreeningController.gadIndex),
             rows: [
               ('Questions answered', '${_answered(c.gad)} / ${c.gad.length}'),
-              ('Score', '${_total(c.gad)} / 21'),
+              ('Score', '${_total(c.gad)} / ${_maxScore(c.gadItems)}'),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
           _Section(
             icon: Icons.thermostat_outlined,
             color: theme.colorScheme.secondary,
-            title: 'PSS-10 · Perceived stress',
+            title: c.catalog.pssTitle,
             onEdit: () => controller.jumpToStep(ScreeningController.pssIndex),
             rows: [
               ('Questions answered', '${_answered(c.pss)} / ${c.pss.length}'),
-              ('Score', '${_total(c.pss)} / 40'),
+              ('Score', '${_total(c.pss)} / ${_maxScore(c.pssItems)}'),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
           _Section(
             icon: Icons.wb_sunny_outlined,
             color: theme.colorScheme.primary,
-            title: 'WHO-5 · Mental wellbeing',
+            title: c.catalog.whoTitle,
             onEdit: () => controller.jumpToStep(ScreeningController.whoIndex),
             rows: [
               ('Questions answered', '${_answered(c.who)} / ${c.who.length}'),
-              ('Score', '${_total(c.who)} / 25'),
+              ('Score', '${_total(c.who)} / ${_maxScore(c.whoItems)}'),
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -122,13 +122,12 @@ class ReviewStep extends StatelessWidget {
     );
   }
 
-  String _labelFor(LifestyleField field) => switch (field) {
-        LifestyleField.sleepHours => 'Sleep',
-        LifestyleField.exercise => 'Exercise',
-        LifestyleField.water => 'Water intake',
-        LifestyleField.screenTime => 'Screen time',
-        LifestyleField.workingHours => 'Work hours',
-      };
+  /// Max possible score for a questionnaire: item count x highest option value.
+  int _maxScore(List<QuestionnaireItem> items) {
+    if (items.isEmpty) return 0;
+    final top = items.first.options.isEmpty ? 0 : items.first.options.length - 1;
+    return items.length * top;
+  }
 
   String _valueFor(LifestyleQuestion q, double? value) {
     if (value == null) return '—';

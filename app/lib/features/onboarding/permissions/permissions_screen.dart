@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 
+import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import 'package:mindease/core/permissions/permissions_service.dart';
 import 'package:mindease/core/storage/app_preferences.dart';
 import 'package:mindease/core/theme/app_colors.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
@@ -8,7 +11,8 @@ import 'package:mindease/shared/widgets/app_backdrop.dart';
 import 'package:mindease/shared/widgets/app_button.dart';
 import 'package:mindease/shared/widgets/app_section_card.dart';
 
-/// Requests only the permissions the screening & support features need.
+/// Requests the permissions the screening & support features need, sourcing
+/// the granted state from the OS via [PermissionsService].
 class PermissionsScreen extends StatefulWidget {
   const PermissionsScreen({super.key});
 
@@ -16,74 +20,121 @@ class PermissionsScreen extends StatefulWidget {
   State<PermissionsScreen> createState() => _PermissionsScreenState();
 }
 
-class _PermissionDef {
-  const _PermissionDef({
-    required this.id,
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.color,
-  });
-
-  final String id;
-  final IconData icon;
-  final String title;
-  final String description;
-  final Color color;
-}
-
 class _PermissionsScreenState extends State<PermissionsScreen> {
   final Set<String> _granted = {};
   String? _granting;
   bool _busy = false;
 
-  static const _permissions = <_PermissionDef>[
-    _PermissionDef(
-      id: 'notifications',
-      icon: Icons.notifications_active_outlined,
-      title: 'Notifications',
-      description: 'Gentle reminders for check-ins and daily AI insights.',
-      color: Color(0xFF4F6DF5),
-    ),
-    _PermissionDef(
-      id: 'microphone',
-      icon: Icons.mic_none_rounded,
-      title: 'Microphone',
-      description: 'Optional voice journaling with your AI coach.',
-      color: Color(0xFF8B8EE8),
-    ),
-    _PermissionDef(
-      id: 'camera',
-      icon: Icons.camera_alt_outlined,
-      title: 'Camera',
-      description: 'Add a profile photo and visual mood check-ins.',
-      color: Color(0xFF30A46C),
-    ),
-    _PermissionDef(
-      id: 'storage',
-      icon: Icons.photo_library_outlined,
-      title: 'Storage',
-      description: 'Save private journal attachments on your device.',
-      color: Color(0xFFE0A03E),
-    ),
-  ];
+  List<PermissionEntry> get _permissions => PermissionsService.entries;
 
-  Future<void> _allow(_PermissionDef p) async {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshFromOs());
+  }
+
+  /// Seeds the in-memory granted set from the OS so the screen truthfully
+  /// reflects permissions the user already allowed in system Settings.
+  Future<void> _refreshFromOs() async {
+    try {
+      final statuses = await PermissionsService.statuses();
+      if (!mounted) return;
+      setState(() {
+        for (final p in _permissions) {
+          final s = statuses[p.id];
+          if (s != null && s.isGranted) _granted.add(p.id);
+        }
+      });
+    } catch (_) {
+      // Platform unavailable (e.g. widget tests): leave state as-is.
+    }
+  }
+
+  Future<void> _allow(PermissionEntry p) async {
     setState(() => _granting = p.id);
-    await Future.delayed(const Duration(milliseconds: 650));
+    final status = await PermissionsService.request(p.id);
+    final granted = status.isGranted;
     if (!mounted) return;
     setState(() {
       _granting = null;
-      _granted.add(p.id);
+      if (granted) {
+        _granted.add(p.id);
+      } else if (status.isPermanentlyDenied) {
+        _granted.remove(p.id);
+      }
     });
+    if (!mounted) return;
+    if (!granted && status.isPermanentlyDenied) {
+      await _showPermanentlyDeniedSheet(p);
+    }
+  }
+
+  Future<void> _showPermanentlyDeniedSheet(PermissionEntry p) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.lg,
+            AppSpacing.lg,
+            AppSpacing.xl,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '${p.title} permission is required',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'You turned this off in the system settings and we won’t '
+                'be able to ask again. Tap below to open Settings and '
+                're-enable "${p.title}" so the feature can work.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      height: 1.5,
+                    ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              AppButton(
+                label: 'Open Settings',
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  PermissionsService.openAppSettingsSheet();
+                },
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              AppButton(
+                label: 'Not now',
+                variant: AppButtonVariant.outlined,
+                expanded: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _continue() async {
-    if (_granted.length != _permissions.length) return;
+    final statuses = await PermissionsService.statuses();
+    final allGranted =
+        _permissions.every((p) => statuses[p.id]?.isGranted ?? false);
+    if (!allGranted) return;
     setState(() => _busy = true);
-    await Future.delayed(const Duration(milliseconds: 800));
+    await Future.delayed(const Duration(milliseconds: 600));
     final prefs = await AppPreferences.load();
     await prefs.setPermissionsGranted(true);
+    _granted
+      ..clear()
+      ..addAll(statuses.keys.where((id) => statuses[id]!.isGranted));
     if (!mounted) return;
     context.go('/screening');
   }
@@ -148,7 +199,8 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
                                       decoration: BoxDecoration(
                                         color: AppColors.success
                                             .withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(99),
+                                        borderRadius:
+                                            BorderRadius.circular(99),
                                       ),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,

@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
 import 'package:mindease/shared/widgets/app_button.dart';
-import 'package:mindease/shared/widgets/wellness_hero.dart';
+import 'package:mindease/shared/widgets/app_logo.dart';
 
 /// Introduction screen shown to new & returning users.
 typedef _Feature = ({IconData icon, String title, String description});
@@ -48,9 +48,9 @@ class WelcomeScreen extends StatelessWidget {
           // control reachable on small devices, text-scale & landscape).
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final heroSize = constraints.maxHeight < 620
-                  ? 120.0
-                  : (constraints.maxHeight >= 900 ? 160.0 : 125.0);
+              final compact = constraints.maxHeight < 620;
+              final logoSize = (constraints.maxWidth * (compact ? 0.4 : 0.48))
+                  .clamp(140.0, 200.0);
               return SingleChildScrollView(
                 child: ConstrainedBox(
                   constraints: BoxConstraints(minHeight: constraints.maxHeight),
@@ -63,20 +63,11 @@ class WelcomeScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           const SizedBox(height: AppSpacing.lg),
-                          Center(child: WellnessHero(size: heroSize)),
-                          const SizedBox(height: AppSpacing.sm),
-                          Text(
-                            'MindEase',
-                            style: theme.textTheme.displaySmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.5,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
+                          Center(child: AppLogoMark(size: logoSize)),
+                          const SizedBox(height: AppSpacing.md),
                           Text(
                             'Your companion for understanding, nurturing and '
-                            'growing your mental wellbeing — one small step at a time.',
+                            'growing your mental wellbeing one small step at a time.',
                             style: theme.textTheme.bodyMedium?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                               height: 1.5,
@@ -103,42 +94,53 @@ class WelcomeScreen extends StatelessWidget {
                             onPressed: () => context.go('/login'),
                           ),
                           const SizedBox(height: AppSpacing.lg),
-                          Wrap(
-                            alignment: WrapAlignment.center,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            spacing: 6,
-                            children: [
-                              AppTextLink(
-                                text: 'Privacy Policy',
-                                onPressed: () => _showDoc(
-                                    context,
-                                    'Privacy Policy',
-                                    'We collect only the information needed '
-                                        'to provide personalized wellness '
-                                        'guidance.\n\nYour screening responses '
-                                        'are used solely to generate your '
-                                        'wellness profile and '
-                                        'recommendations.\n\nYou can request '
-                                        'deletion of your data at any time.'),
+                          Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  AppTextLink(
+                                    text: 'Terms & Conditions',
+                                    onPressed: () => _showDoc(
+                                        context,
+                                        'Terms & Conditions',
+                                        'Synora provides guidance and wellness '
+                                            'insights. It is not a medical '
+                                            'diagnosis or a substitute for '
+                                            'professional care.\n\nIf you are '
+                                            'in crisis, contact a local '
+                                            'emergency service or a mental '
+                                            'health professional immediately.'),
+                                  ),
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: AppSpacing.sm,
+                                    ),
+                                    child: Text(
+                                      '•',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  AppTextLink(
+                                    text: 'Privacy Policy',
+                                    onPressed: () => _showDoc(
+                                        context,
+                                        'Privacy Policy',
+                                        'We collect only the information '
+                                            'needed to provide personalized '
+                                            'wellness guidance.\n\nYour '
+                                            'screening responses are used '
+                                            'solely to generate your wellness '
+                                            'profile and '
+                                            'recommendations.\n\nYou can '
+                                            'request deletion of your data at '
+                                            'any time.'),
+                                  ),
+                                ],
                               ),
-                              const Text(
-                                ' • ',
-                                style: TextStyle(fontSize: 12),
-                              ),
-                              AppTextLink(
-                                text: 'Terms & Conditions',
-                                onPressed: () => _showDoc(
-                                    context,
-                                    'Terms & Conditions',
-                                    'MindEase provides guidance and wellness '
-                                        'insights. It is not a medical '
-                                        'diagnosis or a substitute for '
-                                        'professional care.\n\nIf you are in '
-                                        'crisis, contact a local emergency '
-                                        'service or a mental health '
-                                        'professional immediately.'),
-                              ),
-                            ],
+                            ),
                           ),
                           const SizedBox(height: AppSpacing.sm),
                         ],

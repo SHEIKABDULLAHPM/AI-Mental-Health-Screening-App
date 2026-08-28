@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:mindease/core/storage/app_preferences.dart';
+import 'package:mindease/core/api/journey.dart';
+import 'package:mindease/core/di/app_services.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
 import 'package:mindease/shared/widgets/app_loading_dots.dart';
 import 'package:mindease/shared/widgets/app_logo.dart';
@@ -41,9 +42,20 @@ class _SplashScreenState extends State<SplashScreen>
     await Future.delayed(const Duration(milliseconds: 1800));
     if (!mounted || _navigated) return;
     _navigated = true;
-    final prefs = await AppPreferences.load();
+    String destination = '/welcome';
+    final token = await sessionStore.accessToken();
+    if (token != null) {
+      try {
+        final user = await mindeaseApi.me();
+        destination = await JourneyRouter.nextRoute(user);
+      } on Object {
+        // The stored session is invalid/expired - treat as signed out.
+        await sessionStore.clear();
+        destination = '/welcome';
+      }
+    }
     if (!mounted) return;
-    context.go(prefs.isOnboarded ? '/dashboard' : '/welcome');
+    context.go(destination);
   }
 
   @override
@@ -55,78 +67,90 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Responsive: the brand group is always vertically centered and stays
-    // within bounds on short screens (falls back to a fixed scroll so it can
-    // never overflow), and all text is width-constrained so nothing wraps
-    // off-screen on narrow devices or large text scales.
+    // Responsive layout:
+    //  - The brand lockup (vector artwork, 1342x894) is sized to the largest
+    //    width that still leaves a clean reserved block for the loading dots,
+    //    status line and version at the bottom, and the height is capped the
+    //    same way so it never overflows on short screens.
+    //  - The loading dots, status line and version live in a clean block that
+    //    is always anchored to the bottom edge.
     return Scaffold(
       body: AppBackdrop(
         child: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final compact = constraints.maxHeight < 540;
-              final logoSize = compact
-                  ? 96.0
-                  : (constraints.maxHeight >= 700 ? 148.0 : 120.0);
-              final gap = compact ? 18.0 : 30.0;
-              return SingleChildScrollView(
-                physics: const NeverScrollableScrollPhysics(),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 360),
+              final compact = constraints.maxHeight < 560;
+              const bottomBlockHeight = 150.0;
+              final availableHeight = (constraints.maxHeight - bottomBlockHeight)
+                  .clamp(0.0, constraints.maxHeight)
+                  .toDouble();
+              // Lockup aspect ratio (w:h = 1342:894).
+              const aspect = 894 / 1342;
+              final byWidth = constraints.maxWidth * (compact ? 0.46 : 0.7);
+              final byHeight = availableHeight / aspect;
+              final logoSize = (byWidth < byHeight ? byWidth : byHeight)
+                  .clamp(140.0, 480.0);
+              return SizedBox(
+                width: constraints.maxWidth,
+                height: constraints.maxHeight,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Center(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 16,
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            FadeTransition(
-                              opacity: _fadeIn,
-                              child: ScaleTransition(
-                                scale: _scaleIn,
-                                child: AppLogo(
-                                  size: logoSize,
-                                  showTagline: true,
-                                ),
-                              ),
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: FadeTransition(
+                          opacity: _fadeIn,
+                          child: ScaleTransition(
+                            scale: _scaleIn,
+                            child: AppLogo(
+                              size: logoSize,
+                              showTagline: true,
                             ),
-                            SizedBox(height: gap),
-                            RepaintBoundary(
-                              child: FadeTransition(
-                                opacity: _fadeIn,
-                                child: const AppLoadingDots(size: 12),
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                            Text(
-                              'Preparing your experience…',
-                              textAlign: TextAlign.center,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 28),
-                            Text(
-                              'Version 1.0.0',
-                              textAlign: TextAlign.center,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant
-                                    .withValues(alpha: 0.6),
-                              ),
-                            ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+                        child: FadeTransition(
+                          opacity: _fadeIn,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const RepaintBoundary(
+                                child: AppLoadingDots(size: 12),
+                              ),
+                              const SizedBox(height: 14),
+                              Text(
+                                'Preparing your experience…',
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w500,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                'Version 1.0.0',
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant
+                                      .withValues(alpha: 0.6),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               );
             },

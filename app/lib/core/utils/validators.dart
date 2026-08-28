@@ -22,6 +22,9 @@ abstract final class Validators {
     if (empty != null) return empty;
     if (value!.length < 8) return 'Use at least 8 characters';
     if (!allowWeak) {
+      if (!RegExp(r'[a-z]').hasMatch(value)) {
+        return 'Include at least one lowercase letter';
+      }
       if (!RegExp(r'[A-Z]').hasMatch(value)) {
         return 'Include at least one capital letter';
       }

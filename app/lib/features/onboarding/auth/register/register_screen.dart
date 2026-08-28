@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/storage/app_preferences.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/core/utils/validators.dart';
@@ -72,23 +74,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _busy = true);
     _formError = null;
 
-    // Simulated account creation with a realistic failure path.
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
-
-    if (_email.text.contains('taken')) {
+    try {
+      final session = await mindeaseApi.register(
+        fullName: _name.text.trim(),
+        email: _email.text.trim(),
+        password: _password.text,
+        confirmPassword: _confirm.text,
+      );
+      await sessionStore.save(
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+      );
+      final prefs = await AppPreferences.load();
+      await prefs.saveSession(username: session.user.fullName.split(' ').first);
+      if (!mounted) return;
+      context.go('/consent');
+    } on Failure catch (error) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
-        _formError =
-            'An account already exists for this email. Sign in instead.';
+        _formError = error.message;
       });
-      return;
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _formError = 'Unable to create your account right now. Please try again.';
+      });
     }
-
-    final prefs = await AppPreferences.load();
-    await prefs.saveSession(username: _name.text.split(' ').first);
-    if (!mounted) return;
-    context.go('/consent');
   }
 
   @override

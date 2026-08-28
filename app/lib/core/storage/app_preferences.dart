@@ -49,4 +49,11 @@ class AppPreferences {
     await setConsent(false);
     await setPermissionsGranted(false);
   }
+
+  /// Marks the session as ended and forgets the cached account name.
+  Future<void> clearSession() async {
+    await setSessionActive(false);
+    await setUsername('');
+    await setRememberMe(false);
+  }
 }

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'core/di/app_services.dart';
 
 void main() {
-  runApp(const MindEaseApp());
+  initServices();
+  runApp(const SynoraApp());
 }

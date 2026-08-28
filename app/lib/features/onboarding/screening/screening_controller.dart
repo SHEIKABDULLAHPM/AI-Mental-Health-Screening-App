@@ -15,14 +15,17 @@ class PersonalInfoData {
       occupation.trim().isNotEmpty;
 }
 
-/// Manages the multi-step onboarding screening state.
+/// Manages the multi-step onboarding screening state. Question content comes
+/// from the backend catalog ([loadCatalog]) — nothing is hardcoded here.
 class ScreeningController extends ChangeNotifier {
   final PersonalInfoData personal = PersonalInfoData();
   final Map<LifestyleField, double> lifestyle = {};
-  final List<int> phq = List.filled(9, -1);
-  final List<int> gad = List.filled(7, -1);
-  final List<int> pss = List.filled(10, -1);
-  final List<int> who = List.filled(5, -1);
+  final List<int> phq = [];
+  final List<int> gad = [];
+  final List<int> pss = [];
+  final List<int> who = [];
+
+  ScreeningCatalog? _catalog;
 
   static const int personalIndex = 0;
   static const int lifestyleIndex = 1;
@@ -35,6 +38,39 @@ class ScreeningController extends ChangeNotifier {
 
   int stepIndex = 0;
   int questionIndex = 0;
+
+  /// Whether the backend catalog has been loaded for this run.
+  bool get catalogLoaded => _catalog != null;
+
+  ScreeningCatalog get catalog => _catalog!;
+
+  List<QuestionnaireItem> get phqItems => _catalog?.phqItems ?? const [];
+  List<QuestionnaireItem> get gadItems => _catalog?.gadItems ?? const [];
+  List<QuestionnaireItem> get pssItems => _catalog?.pssItems ?? const [];
+  List<QuestionnaireItem> get whoItems => _catalog?.whoItems ?? const [];
+  List<LifestyleQuestion> get lifestyleQuestions =>
+      _catalog?.lifestyleQuestions ?? const [];
+
+  /// Loads the catalog and sizes the answer lists to its questionnaires.
+  void loadCatalog(ScreeningCatalog catalog) {
+    _catalog = catalog;
+    _resizeAnswers();
+    stepIndex = 0;
+    questionIndex = 0;
+    notifyListeners();
+  }
+
+  void _resizeAnswers() {
+    _fillTo(phq, phqItems.length);
+    _fillTo(gad, gadItems.length);
+    _fillTo(pss, pssItems.length);
+    _fillTo(who, whoItems.length);
+  }
+
+  static void _fillTo(List<int> list, int length) {
+    list.clear();
+    list.addAll(List.filled(length, -1));
+  }
 
   ScreeningArea get area => switch (stepIndex) {
         lifestyleIndex => ScreeningArea.lifestyle,
@@ -89,43 +125,58 @@ class ScreeningController extends ChangeNotifier {
       };
 
   QuestionnaireItem? get currentQuestion => switch (area) {
-        ScreeningArea.phq => phq9Items[questionIndex],
-        ScreeningArea.gad => gad7Items[questionIndex],
-        ScreeningArea.pss => pssItems[questionIndex],
-        ScreeningArea.who => who5Items[questionIndex],
+        ScreeningArea.phq => _at(phqItems, questionIndex),
+        ScreeningArea.gad => _at(gadItems, questionIndex),
+        ScreeningArea.pss => _at(pssItems, questionIndex),
+        ScreeningArea.who => _at(whoItems, questionIndex),
         _ => null,
       };
 
+  static QuestionnaireItem? _at(List<QuestionnaireItem> items, int index) =>
+      index >= 0 && index < items.length ? items[index] : null;
+
   int get currentAnswer => switch (area) {
-        ScreeningArea.phq => phq[questionIndex],
-        ScreeningArea.gad => gad[questionIndex],
-        ScreeningArea.pss => pss[questionIndex],
-        ScreeningArea.who => who[questionIndex],
+        ScreeningArea.phq => _valueAt(phq, questionIndex),
+        ScreeningArea.gad => _valueAt(gad, questionIndex),
+        ScreeningArea.pss => _valueAt(pss, questionIndex),
+        ScreeningArea.who => _valueAt(who, questionIndex),
         _ => -1,
       };
 
-  String get areaLabel => switch (area) {
-        ScreeningArea.personal => 'Personal Information',
-        ScreeningArea.lifestyle => 'Lifestyle Assessment',
-        ScreeningArea.phq => 'PHQ-9 Assessment',
-        ScreeningArea.gad => 'GAD-7 Assessment',
-        ScreeningArea.pss => 'PSS Assessment',
-        ScreeningArea.who => 'WHO-5 Assessment',
-        ScreeningArea.review => 'Review Your Answers',
-      };
+  static int _valueAt(List<int> list, int index) =>
+      index >= 0 && index < list.length ? list[index] : -1;
+
+  String get areaLabel {
+    final catalog = _catalog;
+    return switch (area) {
+      ScreeningArea.personal => 'Personal Information',
+      ScreeningArea.lifestyle => 'Lifestyle Assessment',
+      ScreeningArea.phq => catalog?.phqTitle ?? 'PHQ-9 Assessment',
+      ScreeningArea.gad => catalog?.gadTitle ?? 'GAD-7 Assessment',
+      ScreeningArea.pss => catalog?.pssTitle ?? 'PSS Assessment',
+      ScreeningArea.who => catalog?.whoTitle ?? 'WHO-5 Assessment',
+      ScreeningArea.review => 'Review Your Answers',
+    };
+  }
 
   String get stepLabel => 'Step ${stepIndex + 1} of $totalSteps';
 
   bool get canContinue => switch (area) {
         ScreeningArea.personal => personal.isComplete,
         ScreeningArea.lifestyle =>
-          lifestyle.containsKey(lifestyleQuestions[questionIndex].field),
-        ScreeningArea.phq => phq[questionIndex] >= 0,
-        ScreeningArea.gad => gad[questionIndex] >= 0,
-        ScreeningArea.pss => pss[questionIndex] >= 0,
-        ScreeningArea.who => who[questionIndex] >= 0,
+          _lifestyleAt(questionIndex) != null &&
+              lifestyle.containsKey(_lifestyleAt(questionIndex)!.field),
+        ScreeningArea.phq => _valueAt(phq, questionIndex) >= 0,
+        ScreeningArea.gad => _valueAt(gad, questionIndex) >= 0,
+        ScreeningArea.pss => _valueAt(pss, questionIndex) >= 0,
+        ScreeningArea.who => _valueAt(who, questionIndex) >= 0,
         ScreeningArea.review => isComplete,
       };
+
+  LifestyleQuestion? _lifestyleAt(int index) =>
+      index >= 0 && index < lifestyleQuestions.length
+          ? lifestyleQuestions[index]
+          : null;
 
   double get progress =>
       (answeredCount / totalQuestions).clamp(0.0, 1.0).toDouble();
@@ -163,8 +214,10 @@ class ScreeningController extends ChangeNotifier {
         setScale(who, questionIndex, value);
         break;
       case ScreeningArea.lifestyle:
-        final question = lifestyleQuestions[questionIndex];
-        setLifestyle(question.field, value.toDouble());
+        final question = _lifestyleAt(questionIndex);
+        if (question != null) {
+          setLifestyle(question.field, value.toDouble());
+        }
         break;
       default:
         break;

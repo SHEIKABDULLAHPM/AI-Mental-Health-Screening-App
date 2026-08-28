@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/storage/app_preferences.dart';
 import 'package:mindease/core/theme/app_colors.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
@@ -30,6 +32,29 @@ class _PrivacyConsentScreenState extends State<PrivacyConsentScreen> {
 
   bool get _allConsented => _privacy && _terms && _aiAnalysis && _storage;
 
+  @override
+  void initState() {
+    super.initState();
+    _prefill();
+  }
+
+  /// If the account already completed consent (e.g. resume), pre-check the
+  /// boxes instead of demanding them again.
+  Future<void> _prefill() async {
+    try {
+      final completed = await mindeaseApi.consentCompleted();
+      if (!mounted || !completed) return;
+      setState(() {
+        _privacy = true;
+        _terms = true;
+        _aiAnalysis = true;
+        _storage = true;
+      });
+    } on Object {
+      // Non-fatal: leave checkboxes unchecked.
+    }
+  }
+
   Future<void> _accept() async {
     setState(() => _triedSubmit = true);
     if (!_allConsented) return;
@@ -38,11 +63,25 @@ class _PrivacyConsentScreenState extends State<PrivacyConsentScreen> {
       _busy = true;
       _error = null;
     });
-    await Future.delayed(const Duration(milliseconds: 900));
-    final prefs = await AppPreferences.load();
-    await prefs.setConsent(true);
-    if (!mounted) return;
-    context.go('/permissions');
+    try {
+      await mindeaseApi.acceptConsent();
+      final prefs = await AppPreferences.load();
+      await prefs.setConsent(true);
+      if (!mounted) return;
+      context.go('/permissions');
+    } on Failure catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = error.message;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Unable to save consent right now. Please try again.';
+      });
+    }
   }
 
   @override
@@ -77,7 +116,7 @@ class _PrivacyConsentScreenState extends State<PrivacyConsentScreen> {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'MindEase uses AI to analyse your screening '
+                            'Synora uses AI to analyse your screening '
                             'responses and create a personalised wellness '
                             'profile. Please read the following and give your '
                             'explicit consent.',
@@ -100,7 +139,7 @@ class _PrivacyConsentScreenState extends State<PrivacyConsentScreen> {
                             icon: Icons.description_outlined,
                             iconColor: theme.colorScheme.tertiary,
                             title: 'Terms & Conditions',
-                            subtitle: 'Rules for using MindEase, including '
+                            subtitle: 'Rules for using Synora, including '
                                 'appropriate usage and your responsibilities.',
                           ),
                           const SizedBox(height: AppSpacing.md),

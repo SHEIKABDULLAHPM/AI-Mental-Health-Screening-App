@@ -1,6 +1,30 @@
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/features/ai_coach/presentation/screens/ai_coach_home_screen.dart';
+import 'package:mindease/features/ai_coach/presentation/screens/chat_details_screen.dart';
+import 'package:mindease/features/ai_coach/presentation/screens/chat_screen.dart';
+import 'package:mindease/features/ai_coach/presentation/screens/conversation_history_screen.dart';
+import 'package:mindease/features/challenges/presentation/screens/challenge_details_screen.dart';
+import 'package:mindease/features/challenges/presentation/screens/challenges_home_screen.dart';
 import 'package:mindease/features/dashboard/presentation/screens/dashboard_screen.dart';
+import 'package:mindease/features/future_letters/presentation/screens/create_future_letter_screen.dart';
+import 'package:mindease/features/future_letters/presentation/screens/future_letter_details_screen.dart';
+import 'package:mindease/features/future_letters/presentation/screens/future_letters_home_screen.dart';
+import 'package:mindease/features/habits/presentation/screens/add_habit_screen.dart';
+import 'package:mindease/features/habits/presentation/screens/habit_details_screen.dart';
+import 'package:mindease/features/habits/presentation/screens/habit_tracker_home_screen.dart';
+import 'package:mindease/features/journal/presentation/screens/create_journal_entry_screen.dart';
+import 'package:mindease/features/journal/presentation/screens/edit_journal_entry_screen.dart';
+import 'package:mindease/features/journal/presentation/screens/journal_entry_details_screen.dart';
+import 'package:mindease/features/journal/presentation/screens/journal_history_screen.dart';
+import 'package:mindease/features/journal/presentation/screens/journal_home_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/camera_mood_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/mood_detail_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/mood_history_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/mood_tracking_home_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/mood_result_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/mood_trends_screen.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/record_mood_screen.dart';
 import 'package:mindease/features/onboarding/auth/forgot_password/forgot_password_email_screen.dart';
 import 'package:mindease/features/onboarding/auth/forgot_password/otp_verification_screen.dart';
 import 'package:mindease/features/onboarding/auth/forgot_password/reset_password_screen.dart';
@@ -14,6 +38,12 @@ import 'package:mindease/features/onboarding/screening/screening_screen.dart';
 import 'package:mindease/features/onboarding/screening/wellness_profile_screen.dart';
 import 'package:mindease/features/onboarding/splash/splash_screen.dart';
 import 'package:mindease/features/onboarding/welcome/welcome_screen.dart';
+import 'package:mindease/features/recommendations/presentation/screens/recommendation_activity_screen.dart';
+import 'package:mindease/features/recommendations/presentation/screens/recommendation_details_screen.dart';
+import 'package:mindease/features/recommendations/presentation/screens/recommendations_home_screen.dart';
+import 'package:mindease/features/relax/presentation/screens/activity_player_screen.dart';
+import 'package:mindease/features/relax/presentation/screens/relax_home_screen.dart';
+import 'package:mindease/features/settings/presentation/settings_screen.dart';
 
 /// Central navigation graph for the app (onboarding → dashboard).
 abstract final class AppRouter {
@@ -79,6 +109,168 @@ abstract final class AppRouter {
           path: '/dashboard',
           name: 'dashboard',
           builder: (_, __) => const DashboardScreen(),),
+      GoRoute(
+          path: '/settings',
+          name: 'settings',
+          builder: (_, __) => const SettingsScreen(),),
+      GoRoute(
+          path: '/mood',
+          name: 'mood',
+          builder: (_, __) => const MoodTrackingHomeScreen(),),
+      GoRoute(
+          path: '/mood-record',
+          name: 'moodRecord',
+          builder: (_, state) => RecordMoodScreen(
+            cameraResult: state.extra as CameraMoodResult?,
+          ),),
+      GoRoute(
+          path: '/mood-camera',
+          name: 'moodCamera',
+          builder: (_, __) => const CameraMoodScreen(),),
+      GoRoute(
+          path: '/mood-history',
+          name: 'moodHistory',
+          builder: (_, __) => const MoodHistoryScreen(),),
+      GoRoute(
+          path: '/mood-detail/:id',
+          name: 'moodDetail',
+          builder: (_, state) => MoodDetailScreen(
+            entryId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/mood-trends',
+          name: 'moodTrends',
+          builder: (_, __) => const MoodTrendsScreen(),),
+      GoRoute(
+          path: '/mood-result',
+          name: 'moodResult',
+          builder: (_, state) {
+            final args = state.extra as Map<String, dynamic>?;
+            return MoodResultScreen(
+              moodId: args?['moodId'] as String? ?? 'okay',
+              analysisResult: args?['analysisResult'] as Map<String, dynamic>?,
+              emotion: args?['emotion'] as String?,
+              note: args?['note'] as String?,
+              intensity: args?['intensity'] as int?,
+            );
+          },),
+      GoRoute(
+          path: '/journal',
+          name: 'journal',
+          builder: (_, __) => const JournalHomeScreen(),),
+      GoRoute(
+          path: '/journal-create',
+          name: 'journalCreate',
+          builder: (_, __) => const CreateJournalEntryScreen(),),
+      GoRoute(
+          path: '/journal/:id',
+          name: 'journalDetails',
+          builder: (_, state) => JournalEntryDetailsScreen(
+            entryId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/journal/:id/edit',
+          name: 'journalEdit',
+          builder: (_, state) => EditJournalEntryScreen(
+            entryId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/journal-history',
+          name: 'journalHistory',
+          builder: (_, __) => const JournalHistoryScreen(),),
+      GoRoute(
+          path: '/ai-coach',
+          name: 'aiCoach',
+          builder: (_, __) => const AiCoachHomeScreen(),),
+      GoRoute(
+          path: '/ai-coach-chat',
+          name: 'aiCoachChat',
+          builder: (_, state) => ChatScreen(
+            title: 'AI Coach',
+            initialPrompt: state.extra as String?,
+          ),),
+      GoRoute(
+          path: '/ai-coach/:id',
+          name: 'aiCoachDetails',
+          builder: (_, state) => ChatDetailsScreen(
+            conversationId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/ai-coach-history',
+          name: 'aiCoachHistory',
+          builder: (_, __) => const ConversationHistoryScreen(),),
+      GoRoute(
+          path: '/recommendations',
+          name: 'recommendations',
+          builder: (_, __) => const RecommendationsHomeScreen(),),
+      GoRoute(
+          path: '/recommendations/:id',
+          name: 'recommendationDetails',
+          builder: (_, state) => RecommendationDetailsScreen(
+            recommendationId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/challenges',
+          name: 'challenges',
+          builder: (_, __) => const ChallengesHomeScreen(),),
+      GoRoute(
+          path: '/challenges/:id',
+          name: 'challengeDetails',
+          builder: (_, state) => ChallengeDetailsScreen(
+            challengeId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/habits',
+          name: 'habits',
+          builder: (_, __) => const HabitTrackerHomeScreen(),),
+      GoRoute(
+          path: '/habits/add',
+          name: 'habitAdd',
+          builder: (_, __) => const AddHabitScreen(),),
+      GoRoute(
+          path: '/habits/:id',
+          name: 'habitDetails',
+          builder: (_, state) => HabitDetailsScreen(
+            habitId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/activities/:slug',
+          name: 'recommendationActivity',
+          builder: (_, state) {
+            final args = state.extra as Map<String, dynamic>?;
+            return RecommendationActivityScreen(
+              recommendationId: args?['recommendationId'] as String? ?? '',
+              title: args?['title'] as String? ?? 'Activity',
+              description: args?['description'] as String? ?? '',
+              category: args?['category'] as String?,
+              duration: args?['duration'] as String?,
+              difficulty: args?['difficulty'] as String?,
+            );
+          },),
+      GoRoute(
+          path: '/relax',
+          name: 'relax',
+          builder: (_, __) => const RelaxHomeScreen(),),
+      GoRoute(
+          path: '/relax/:id',
+          name: 'relaxActivity',
+          builder: (_, state) => ActivityPlayerScreen(
+            activityId: state.pathParameters['id']!,
+          ),),
+      GoRoute(
+          path: '/letters',
+          name: 'letters',
+          builder: (_, __) => const FutureLettersHomeScreen(),),
+      GoRoute(
+          path: '/letters/create',
+          name: 'lettersCreate',
+          builder: (_, __) => const CreateFutureLetterScreen(),),
+      GoRoute(
+          path: '/letters/:id',
+          name: 'letterDetails',
+          builder: (_, state) => FutureLetterDetailsScreen(
+            letterId: state.pathParameters['id']!,
+          ),),
     ],
     errorBuilder: (_, __) => const SplashScreen(),
   );

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
 import 'package:mindease/shared/widgets/app_button.dart';
@@ -24,7 +26,6 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   Timer? _timer;
   Duration _remaining = const Duration(seconds: 30);
-  int _resends = 0;
 
   @override
   void initState() {
@@ -37,6 +38,9 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     _timer?.cancel();
     super.dispose();
   }
+
+  String get _email =>
+      GoRouterState.of(context).uri.queryParameters['email'] ?? '';
 
   void _startTimer() {
     _timer?.cancel();
@@ -53,12 +57,27 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
   }
 
   void _resend() {
-    _resends++;
+    final email = _email;
     setState(() => _error = null);
     _startTimer();
+    if (email.isEmpty) {
+      setState(() => _error = 'Email missing. Please start again.');
+      return;
+    }
+    // Fire-and-forget: issues a fresh OTP for the same email.
+    mindeaseApi.forgotPassword(email).catchError((_) {
+      if (!mounted) return;
+      setState(() => _error = 'Could not resend the code. Please try again.');
+    });
   }
 
   Future<void> _verify() async {
+    if (_busy) return;
+    final email = _email;
+    if (email.isEmpty) {
+      setState(() => _error = 'Email missing. Please start again.');
+      return;
+    }
     if (_code.length != 6) {
       setState(() => _error = 'Please enter the complete 6-digit code.');
       return;
@@ -67,17 +86,27 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       _busy = true;
       _error = null;
     });
-    await Future.delayed(const Duration(milliseconds: 1400));
-    if (!mounted) return;
-    if (_resends == 0 && _code == '000000') {
+    try {
+      final resetToken = await mindeaseApi.verifyOtp(email, _code);
+      if (!mounted) return;
+      _timer?.cancel();
+      setState(() => _busy = false);
+      context.go(
+        '/forgot-password/reset?email=${Uri.encodeComponent(email)}&token=${Uri.encodeComponent(resetToken)}',
+      );
+    } on Failure catch (error) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = 'That code doesn\u2019t look right. Check and try again.';
+        _error = error.message;
       });
-      return;
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Unable to verify the code right now. Please try again.';
+      });
     }
-    _timer?.cancel();
-    context.go('/forgot-password/reset');
   }
 
   String get _timerLabel {

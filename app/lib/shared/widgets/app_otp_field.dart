@@ -55,14 +55,20 @@ class _AppOtpFieldState extends State<AppOtpField> {
   void _handlePaste(String text) {
     final digits = text.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) return;
-    final fill =
-        digits.padRight(widget.length, '0').substring(0, widget.length);
+    // Fill boxes left-to-right with the actual digits only — never zero-pad,
+    // since a short paste must not be silently turned into a wrong full code
+    // and auto-submitted (which would burn one of the 5 backend attempts).
+    final count = digits.length > widget.length ? widget.length : digits.length;
     for (var i = 0; i < widget.length; i++) {
-      _controllers[i].text = fill[i];
+      _controllers[i].text = i < count ? digits[i] : '';
     }
-    _focusNodes.last.requestFocus();
+    final nextEmpty =
+        count < widget.length ? count : widget.length - 1;
+    _focusNodes[nextEmpty].requestFocus();
     widget.onChanged?.call(_value);
-    widget.onCompleted(_value);
+    if (_value.length == widget.length) {
+      widget.onCompleted(_value);
+    }
   }
 
   void _onDigitChange(int index, String value) {
@@ -121,7 +127,6 @@ class _AppOtpFieldState extends State<AppOtpField> {
       controller: _controllers[index],
       focusNode: _focusNodes[index],
       enabled: widget.enabled,
-      maxLength: 2,
       autofocus: index == 0,
       textAlign: TextAlign.center,
       keyboardType: TextInputType.number,

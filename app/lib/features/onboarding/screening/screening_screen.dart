@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/shared/widgets/app_button.dart';
 import 'package:mindease/features/onboarding/screening/data/questionnaires.dart';
@@ -22,54 +26,139 @@ class ScreeningScreen extends StatefulWidget {
 class _ScreeningScreenState extends State<ScreeningScreen> {
   ScreeningController get _controller => ScreeningSession.controller;
 
+  Timer? _saveTimer;
+  bool _submitting = false;
+  bool _loading = true;
+  String? _catalogError;
+
   @override
   void initState() {
     super.initState();
     ScreeningSession.firstName ??= '';
+    _controller.addListener(_onControllerChanged);
+    _ensureCatalog();
+  }
+
+  @override
+  void dispose() {
+    _saveTimer?.cancel();
+    _controller.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  /// Loads the backend questionnaire catalog that drives this run.
+  Future<void> _ensureCatalog() async {
+    if (_controller.catalogLoaded) {
+      setState(() => _loading = false);
+      _ensureScreening();
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _catalogError = null;
+    });
+    try {
+      final api = await mindeaseApi.questionnaireCatalog();
+      final catalog = ScreeningCatalog.fromApi(api);
+      _controller.loadCatalog(catalog);
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _ensureScreening();
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _catalogError = 'We couldn’t load the assessment questions. '
+            'Please check your connection and try again.';
+      });
+    }
+  }
+
+  /// Creates (or resumes) the server-side draft once per run. Failing quietly
+  /// here is fine — the final submit re-creates the draft if needed.
+  Future<void> _ensureScreening() async {
+    if (ScreeningSession.screeningId != null) return;
+    try {
+      final created = await mindeaseApi.createScreening();
+      ScreeningSession.screeningId ??= created['id'] as String?;
+    } on Object {
+      // Non-fatal: submit will surface any real failure.
+    }
+  }
+
+  void _onControllerChanged() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 1200), _autosave);
+  }
+
+  Future<void> _autosave() async {
+    final id = ScreeningSession.screeningId;
+    if (id == null) return;
+    try {
+      await mindeaseApi.saveScreening(
+        id,
+        ScreeningSession.payload(_controller),
+      );
+    } on Object {
+      // Non-fatal: the final submit re-saves the complete payload.
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _controller;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Screening'),
         leading: IconButton(
           tooltip: 'Back',
-          onPressed: c.stepIndex == 0 ? () => _exit() : () => c.back(),
+          onPressed: _loading || _catalogError != null
+              ? () => _exit()
+              : _controller.stepIndex == 0
+                  ? () => _exit()
+                  : () => _controller.back(),
           icon: const Icon(Icons.arrow_back_rounded),
         ),
         actions: [
           TextButton(onPressed: () => _exit(), child: const Text('Exit')),
         ],
       ),
-      body: AnimatedBuilder(
-        animation: c,
-        builder: (context, _) {
-          return Column(
-            children: [
-              _ProgressHeader(controller: c),
-              const Divider(height: 1),
-              Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 260),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  child: SizedBox(
-                    key: ValueKey((c.area, c.questionIndex)),
-                    child: _buildBody(c),
-                  ),
+      body: _catalogError != null
+          ? _CatalogErrorState(message: _catalogError!, onRetry: _ensureCatalog)
+          : _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _buildScreening(context),
+    );
+  }
+
+  Widget _buildScreening(BuildContext context) {
+    final c = _controller;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) {
+        return Column(
+          children: [
+            _ProgressHeader(controller: c),
+            const Divider(height: 1),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 260),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                child: SizedBox(
+                  key: ValueKey((c.area, c.questionIndex)),
+                  child: _buildBody(c),
                 ),
               ),
-              _BottomBar(
-                controller: c,
-                onBack: c.back,
-                onNext: () => _next(),
-              ),
-            ],
-          );
-        },
-      ),
+            ),
+            _BottomBar(
+              controller: c,
+              submitting: _submitting,
+              onBack: c.back,
+              onNext: () => _next(),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -86,14 +175,65 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
     }
   }
 
-  void _next() {
+  Future<void> _next() async {
     final c = _controller;
     if (!c.canContinue) return;
-    if (c.area == ScreeningArea.review) {
-      context.go('/processing');
+    if (c.area != ScreeningArea.review) {
+      c.next();
       return;
     }
-    c.next();
+    await _submit();
+  }
+
+  /// Pushes the completed assessment to the backend, then transitions to the
+  /// (pending-state) processing screen.
+  Future<void> _submit() async {
+    if (!_controller.isComplete || _submitting) return;
+    _saveTimer?.cancel();
+    setState(() => _submitting = true);
+    try {
+      var id = ScreeningSession.screeningId;
+      if (id == null) {
+        final created = await mindeaseApi.createScreening();
+        id = created['id'] as String?;
+        ScreeningSession.screeningId = id;
+      }
+      if (id == null) {
+        throw const ServerFailure(
+          'Unable to start an assessment right now. Please try again.',
+        );
+      }
+      await mindeaseApi.saveScreening(
+        id,
+        ScreeningSession.payload(_controller),
+      );
+      final submitted = await mindeaseApi.submitScreening(id);
+      final processing = submitted['processing'];
+      final aiStatus = processing is Map
+          ? processing['aiStatus'] as String?
+          : null;
+      final jobId = processing is Map ? processing['jobId'] as String? : null;
+      ScreeningSession.submissionAiStatus =
+          aiStatus ?? 'AI_ANALYSIS_PENDING';
+      ScreeningSession.aiJobId = jobId;
+      if (!mounted) return;
+      context.go('/processing');
+    } on Failure catch (error) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    } on Object {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to submit the assessment right now. '
+              'Please try again.'),
+        ),
+      );
+    }
   }
 
   void _exit() {
@@ -134,8 +274,8 @@ class _ScaleQuestion extends StatelessWidget {
     final theme = Theme.of(context);
     final question = controller.currentQuestion;
     if (question == null) return const SizedBox.shrink();
-    final isPhq9 =
-        controller.area == ScreeningArea.phq && controller.questionIndex == 8;
+    final isLastPhq9 = controller.area == ScreeningArea.phq &&
+        controller.questionIndex == controller.phqItems.length - 1;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(
@@ -179,7 +319,7 @@ class _ScaleQuestion extends StatelessWidget {
                 : controller.currentAnswer,
             onSelected: (v) => controller.setQuestionAnswer(v),
           ),
-          if (isPhq9) ...[
+          if (isLastPhq9) ...[
             const SizedBox(height: AppSpacing.lg),
             _CrisisNote(),
           ],
@@ -198,7 +338,7 @@ class _LifestyleQuestion extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const questions = lifestyleQuestions;
+    final questions = controller.lifestyleQuestions;
     final q = questions[controller.questionIndex];
     final current = controller.lifestyle[q.field];
 
@@ -256,6 +396,57 @@ class _LifestyleQuestion extends StatelessWidget {
               onSelected: (v) => controller.setLifestyle(q.field, v.toDouble()),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Friendly retry state shown when the questionnaire catalog cannot be loaded.
+class _CatalogErrorState extends StatelessWidget {
+  const _CatalogErrorState({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.cloud_off_rounded,
+              size: 48,
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Unable to load assessment',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              message,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            AppButton(
+              label: 'Try Again',
+              icon: Icons.refresh_rounded,
+              onPressed: onRetry,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -355,11 +546,13 @@ class _ProgressHeader extends StatelessWidget {
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.controller,
+    required this.submitting,
     required this.onBack,
     required this.onNext,
   });
 
   final ScreeningController controller;
+  final bool submitting;
   final VoidCallback onBack;
   final VoidCallback onNext;
 
@@ -391,7 +584,7 @@ class _BottomBar extends StatelessWidget {
                 child: AppButton(
                   label: 'Back',
                   variant: AppButtonVariant.outlined,
-                  onPressed: onBack,
+                  onPressed: submitting ? null : onBack,
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
@@ -403,7 +596,9 @@ class _BottomBar extends StatelessWidget {
                 icon: isReview
                     ? Icons.rocket_launch_rounded
                     : Icons.arrow_forward_rounded,
-                onPressed: controller.canContinue ? onNext : null,
+                loading: submitting,
+                onPressed:
+                    controller.canContinue && !submitting ? onNext : null,
               ),
             ),
           ],

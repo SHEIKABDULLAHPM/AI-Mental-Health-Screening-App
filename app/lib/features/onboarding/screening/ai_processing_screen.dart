@@ -3,15 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/api/mindease_api.dart';
+import 'package:mindease/core/di/app_services.dart';
 import 'package:mindease/core/theme/app_colors.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
+import 'package:mindease/features/onboarding/screening/screening_session.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
 import 'package:mindease/shared/widgets/app_loading_dots.dart';
 import 'package:mindease/shared/widgets/app_logo.dart';
-import 'package:mindease/features/onboarding/screening/screening_session.dart';
-import 'package:mindease/features/onboarding/screening/wellness_engine.dart';
 
-/// Shows AI analysing responses before presenting the wellness profile.
+/// Shows the assessment being finalized by the AI service while it analyzes
+/// the submitted responses. Polls the server-side analysis job and hands over
+/// to the wellness profile when it completes, or offers a retry on failure.
 class AiProcessingScreen extends StatefulWidget {
   const AiProcessingScreen({super.key});
 
@@ -28,11 +31,25 @@ class _AiProcessingScreenState extends State<AiProcessingScreen>
     'Preparing personalized insights…',
   ];
 
-  late final AnimationController _pulse;
+static const _jobStates = {
+    'QUEUED',
+    'PROCESSING',
+    'COMPLETED',
+    'FAILED',
+    'RETRY_QUEUED',
+  };
 
+  late final AnimationController _pulse;
+  late final MindeaseApi _api;
   Timer? _messageTimer;
+  Timer? _pollTimer;
   int _messageIndex = 0;
   bool _completed = false;
+  bool _retrying = false;
+  bool _failed = false;
+  bool _unknownJob = false;
+  String? _jobId;
+  int _unknownPolls = 0;
 
   @override
   void initState() {
@@ -41,6 +58,8 @@ class _AiProcessingScreenState extends State<AiProcessingScreen>
       vsync: this,
       duration: const Duration(milliseconds: 2600),
     )..repeat();
+    _api = mindeaseApi;
+    _jobId = ScreeningSession.aiJobId;
 
     _messageTimer = Timer.periodic(const Duration(milliseconds: 1300), (_) {
       if (!mounted) return;
@@ -49,23 +68,104 @@ class _AiProcessingScreenState extends State<AiProcessingScreen>
       });
     });
 
-    _computeLater();
+    if (_jobId == null) {
+      _showUnknownJob();
+    } else {
+      _poll();
+    }
   }
 
-  Future<void> _computeLater() async {
-    await Future.delayed(const Duration(milliseconds: 4200));
+  void _showUnknownJob() {
+    // No job id to poll: never pretend the analysis succeeded.
+    _messageTimer?.cancel();
+    _pollTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _unknownJob = true;
+      _failed = true;
+    });
+  }
+
+  Future<void> _poll() async {
     if (!mounted || _completed) return;
+    _pollTimer?.cancel();
+    final jobId = _jobId;
+    if (jobId == null) return;
+
+    final status = await _api.aiAnalysisStatus(jobId);
+    if (!mounted || _completed) return;
+
+    final state = status['status'] as String?;
+    if (state == null) {
+      // Unknown job id: keep polling briefly, then show an error so the user
+      // can retry instead of silently navigating away.
+      _unknownPolls += 1;
+      _unknownJob = true;
+      if (_unknownPolls > 5) {
+        _showUnknownJob();
+        return;
+      }
+      _schedulePoll();
+      return;
+    }
+
+    if (state == 'COMPLETED') {
+      _completeToProfile();
+      return;
+    }
+
+    if (state == 'FAILED') {
+      setState(() => _failed = true);
+      return;
+    }
+
+    if (_jobStates.contains(state)) {
+      _schedulePoll();
+    }
+  }
+
+  void _schedulePoll() {
+    if (!mounted || _completed) return;
+    _pollTimer = Timer(const Duration(seconds: 2), _poll);
+  }
+
+  Future<void> _completeToProfile() async {
+    if (_completed) return;
     _completed = true;
     _messageTimer?.cancel();
-    ScreeningSession.report =
-        WellnessEngine.compute(ScreeningSession.controller);
+    _pollTimer?.cancel();
     if (!mounted) return;
     context.go('/wellness-profile');
+  }
+
+  Future<void> _retry() async {
+    final jobId = _jobId;
+    if (jobId == null || _retrying) return;
+    setState(() => _retrying = true);
+    try {
+      await _api.retryAiAnalysis(jobId);
+      if (!mounted) return;
+      setState(() {
+        _retrying = false;
+        _failed = false;
+      });
+      _schedulePoll();
+    } on Object {
+      if (!mounted) return;
+      setState(() => _retrying = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to restart the analysis right now. '
+              'Please try again in a moment.'),
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
     _messageTimer?.cancel();
+    _pollTimer?.cancel();
     _pulse.dispose();
     super.dispose();
   }
@@ -165,13 +265,27 @@ class _AiProcessingScreenState extends State<AiProcessingScreen>
                   ),
                 ),
                 const SizedBox(height: AppSpacing.lg),
-                const Center(child: AppLoadingDots(size: 14)),
+                if (_failed)
+                  _FailedCard(
+                    onRetry: _unknownJob || _retrying ? null : _retry,
+                    unknown: _unknownJob,
+                  )
+                else
+                  const Center(child: AppLoadingDots(size: 14)),
                 const SizedBox(height: AppSpacing.xl),
                 SafeArea(
                   top: false,
                   child: Center(
                     child: Text(
-                      'Please keep the app open — this usually takes a few seconds.',
+                      _failed
+                          ? _unknownJob
+                              ? 'We couldn’t find the analysis for this '
+                                  'assessment. You can review your profile '
+                                  'later.'
+                              : 'We couldn’t complete the analysis this time. '
+                                  'You can retry, or review your profile later.'
+                          : 'Please keep the app open — this usually takes '
+                              'a few seconds.',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
@@ -184,6 +298,48 @@ class _AiProcessingScreenState extends State<AiProcessingScreen>
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Compact inline card shown when the analysis job fails, offering a retry.
+class _FailedCard extends StatelessWidget {
+  const _FailedCard({this.onRetry, this.unknown = false});
+
+  final VoidCallback? onRetry;
+  final bool unknown;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(top: AppSpacing.md),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.errorContainer.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.refresh_rounded, color: theme.colorScheme.error),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              unknown
+                  ? 'Analysis unavailable.'
+                  : 'Analysis paused — retry when you’re ready.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onErrorContainer,
+              ),
+            ),
+          ),
+          if (!unknown)
+            TextButton(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+        ],
       ),
     );
   }

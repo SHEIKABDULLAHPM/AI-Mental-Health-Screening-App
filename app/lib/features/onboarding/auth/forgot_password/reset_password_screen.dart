@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/theme/app_colors.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/core/utils/validators.dart';
@@ -70,7 +72,14 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     }
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit() {
+    final email = GoRouterState.of(context).uri.queryParameters['email'] ?? '';
+    final resetToken =
+        GoRouterState.of(context).uri.queryParameters['token'] ?? '';
+    return _submitReset(email, resetToken);
+  }
+
+  Future<void> _submitReset(String email, String resetToken) async {
     final errors = <String, String>{
       if (Validators.password(_password.text) != null)
         'password': Validators.password(_password.text)!,
@@ -84,11 +93,38 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       _formError = null;
     });
     if (errors.isNotEmpty) return;
+    if (email.isEmpty || resetToken.isEmpty) {
+      setState(
+        () => _formError = 'Session expired. Please request a new code.',
+      );
+      return;
+    }
 
     setState(() => _busy = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (!mounted) return;
-    context.go('/forgot-password/success');
+    try {
+      await mindeaseApi.resetPassword(
+        email: email,
+        resetToken: resetToken,
+        newPassword: _password.text,
+        confirmPassword: _confirm.text,
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      context.go('/forgot-password/success');
+    } on Failure catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _formError = error.message;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _formError =
+            'Unable to update the password right now. Please try again.';
+      });
+    }
   }
 
   @override

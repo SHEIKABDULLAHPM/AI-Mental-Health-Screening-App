@@ -17,6 +17,21 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+    project.pluginManager.withPlugin("com.android.library") {
+        project.extensions.configure<com.android.build.gradle.LibraryExtension> {
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+        }
+    }
+    project.pluginManager.withPlugin("org.jetbrains.kotlin.android") {
+        project.extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
+            compilerOptions {
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            }
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {

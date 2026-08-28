@@ -64,13 +64,25 @@ class AppButton extends StatelessWidget {
           onPressed: loading ? null : onPressed,
           child: content,
         ),
+      AppButtonVariant.danger => FilledButton(
+          onPressed: loading ? null : onPressed,
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.error,
+            foregroundColor: Theme.of(context).colorScheme.onError,
+            disabledBackgroundColor:
+                Theme.of(context).colorScheme.error.withValues(alpha: 0.35),
+            disabledForegroundColor:
+                Theme.of(context).colorScheme.onError.withValues(alpha: 0.7),
+          ),
+          child: content,
+        ),
     };
 
     return expanded ? SizedBox(width: double.infinity, child: button) : button;
   }
 }
 
-enum AppButtonVariant { primary, outlined, text }
+enum AppButtonVariant { primary, outlined, text, danger }
 
 /// Promotes text-only content to a tappable TextButton-like row for footers,
 /// e.g. "Already have an account? Sign In".

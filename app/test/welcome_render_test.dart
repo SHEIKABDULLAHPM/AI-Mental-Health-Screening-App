@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mindease/core/theme/app_theme.dart';
 import 'package:mindease/features/onboarding/welcome/welcome_screen.dart';
-import 'package:mindease/shared/widgets/wellness_hero.dart';
+import 'package:mindease/shared/widgets/app_logo.dart';
 
 void main() {
   testWidgets('welcome layout extents at phone size', (tester) async {
@@ -30,7 +30,6 @@ void main() {
     const viewportH = 2400 / 2.8125;
     debugPrint('GEOM logical screen 384x$viewportH');
     for (final needle in [
-      'MindEase',
       'Your companion for understanding, nurturing and growing your mental wellbeing — one small step at a time.',
       'AI Mental Health Screening',
       'Personalized Wellness Guidance',
@@ -45,7 +44,14 @@ void main() {
         debugPrint('GEOM welcome "$needle" rect=$r visible=${r.bottom < viewportH}');
       }
     }
-    debugPrint('GEOM hero ${tester.getRect(find.byType(WellnessHero))}');
+    debugPrint('GEOM logo ${tester.getRect(find.byType(AppLogoMark))}');
+    for (final needle in ['Terms & Conditions', 'Privacy Policy']) {
+      final f = find.text(needle);
+      if (f.evaluate().isNotEmpty) {
+        final r = tester.getRect(f);
+        debugPrint('GEOM welcome "$needle" rect=$r');
+      }
+    }
     // Report the scrollable's dimension.
     final scroll = find.byType(SingleChildScrollView);
     if (scroll.evaluate().isNotEmpty) {

@@ -4,6 +4,7 @@ import 'package:mindease/features/auth/domain/entities/auth_session.dart';
 import 'package:mindease/features/auth/domain/entities/login_params.dart';
 import 'package:mindease/features/auth/domain/entities/user.dart';
 import 'package:mindease/features/auth/domain/repositories/auth_repository.dart';
+import 'package:mindease/features/onboarding/screening/screening_session.dart';
 
 /// Authentication state management via ChangeNotifier.
 class AuthController extends ChangeNotifier {
@@ -30,6 +31,8 @@ class AuthController extends ChangeNotifier {
           .login(LoginParams(email: email, password: password));
       _user = await _repository.getCurrentUser();
       _status = AuthStatus.authenticated;
+      // A fresh sign-in must never inherit a previous user's screening draft.
+      ScreeningSession.reset();
     } catch (e) {
       _error = e.toString();
       _status = AuthStatus.unauthenticated;

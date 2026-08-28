@@ -20,10 +20,25 @@ dependencies:
   dio: ^5.6.0
   # Security: encrypted storage for tokens
   flutter_secure_storage: ^9.2.2
+  # Permissions: runtime requests for notifications, microphone, camera & storage.
+  permission_handler: ^11.3.7
+  # Camera & on-device face detection for mood analysis
+  camera: ^0.10.5+9
+  google_mlkit_face_detection: ^0.12.0
+  # On-device emotion classification via TFLite
+  tflite_flutter: ^0.12.1
+  # Media: image capture/selection and voice recording
+  image_picker: ^1.1.2
+  record: ^6.0.4
+  just_audio: ^0.9.42
+  mime: ^2.0.0
+  path_provider: ^2.1.5
+  path: ^1.9.1
   # Utilities
   intl: ^0.19.0
   equatable: ^2.0.5
   shared_preferences: ^2.5.5
+  flutter_svg: ^2.3.0
 
 dev_dependencies:
   flutter_test:
@@ -32,6 +47,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/logo/
+    - assets/models/emotion_model.tflite
 
   fonts:
     - family: Inter

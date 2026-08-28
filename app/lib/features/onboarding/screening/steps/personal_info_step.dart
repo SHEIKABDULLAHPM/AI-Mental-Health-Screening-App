@@ -16,29 +16,24 @@ class PersonalInfoStep extends StatefulWidget {
 }
 
 class _PersonalInfoStepState extends State<PersonalInfoStep> {
-  static const _genderOptions = [
-    'Female',
-    'Male',
-    'Non-binary',
-    'Prefer not to say',
-  ];
-
-  static const _occupations = [
-    'Student',
-    'Employed full-time',
-    'Working part-time',
-    'Self-employed',
-    'Homemaker',
-    'Retired',
-    'Unemployed',
-    'Prefer not to say',
-  ];
+  static const _fallbackGender = ['Prefer not to say'];
+  static const _fallbackOccupations = ['Prefer not to say'];
 
   late final TextEditingController _age;
   String? _ageError;
 
   String get _gender => widget.controller.personal.gender;
   String get _occupation => widget.controller.personal.occupation;
+
+  List<String> get _genderOptions =>
+      widget.controller.catalog.genderOptions.isEmpty
+          ? _fallbackGender
+          : widget.controller.catalog.genderOptions;
+
+  List<String> get _occupations =>
+      widget.controller.catalog.occupationOptions.isEmpty
+          ? _fallbackOccupations
+          : widget.controller.catalog.occupationOptions;
 
   @override
   void initState() {

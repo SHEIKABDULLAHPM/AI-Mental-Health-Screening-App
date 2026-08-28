@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:mindease/core/storage/app_preferences.dart';
+import 'package:mindease/core/api/models.dart';
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/theme/app_colors.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
@@ -9,9 +11,10 @@ import 'package:mindease/shared/widgets/app_button.dart';
 import 'package:mindease/shared/widgets/app_section_card.dart';
 import 'package:mindease/shared/widgets/ring_painter.dart';
 import 'package:mindease/features/onboarding/screening/screening_session.dart';
-import 'package:mindease/features/onboarding/screening/wellness_engine.dart';
 
-/// AI-generated initial wellness summary presented after screening.
+/// AI-generated initial wellness summary presented after screening. The
+/// report is fetched from the backend (GET /wellness-profile) — never invented
+/// on the client.
 class WellnessProfileScreen extends StatefulWidget {
   const WellnessProfileScreen({super.key});
 
@@ -21,27 +24,59 @@ class WellnessProfileScreen extends StatefulWidget {
 
 class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
   bool _busy = false;
+  bool _loading = true;
+  String? _error;
+  MindeaseProfile? _profile;
 
-  WellnessReport get _report => ScreeningSession.report!;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final profile = await mindeaseApi.wellnessProfile();
+      if (!mounted) return;
+      setState(() {
+        _profile = profile;
+        _loading = false;
+      });
+    } on Failure catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Unable to load your wellness profile right now. '
+            'Please try again.';
+        _loading = false;
+      });
+    }
+  }
 
   Future<void> _continue() async {
     setState(() => _busy = true);
     await Future.delayed(const Duration(milliseconds: 900));
-    final prefs = await AppPreferences.load();
-    await prefs.setOnboarded(true);
     if (!mounted) return;
     context.go('/dashboard');
   }
 
   void _retake() {
-    ScreeningSession.controller.jumpToStep(0);
+    ScreeningSession.retake();
     context.go('/screening');
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final report = _report;
 
     return Scaffold(
       body: AppBackdrop(
@@ -70,33 +105,48 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
                         ),
                       ),
                       const SizedBox(height: AppSpacing.lg),
-                      Center(child: _ScoreRing(report.wellnessScore)),
-                      const SizedBox(height: AppSpacing.lg),
-                      _MetricGrid(report: report),
-                      const SizedBox(height: AppSpacing.lg),
-                      AppSectionCard(
-                        icon: Icons.auto_awesome_rounded,
-                        iconColor: theme.colorScheme.tertiary,
-                        title: 'Primary Wellness Focus',
-                        subtitle: report.focusLabel,
-                        children: [
-                          const SizedBox(height: AppSpacing.sm),
-                          Text(
-                            'Your AI-generated insight',
-                            style: theme.textTheme.labelLarge?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
+                      if (_loading)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(AppSpacing.xl),
+                            child: CircularProgressIndicator(),
                           ),
-                          const SizedBox(height: 6),
-                          Text(
-                            report.aiInsight,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              height: 1.6,
+                        )
+                      else if (_error != null)
+                        _ErrorCard(message: _error!, onRetry: _load)
+                      else if (_profile == null || _profile!.isPending)
+                        _PendingCard()
+                      else ...[
+                        Center(
+                          child: _ScoreRing(_profile!.wellnessScore ?? 0),
+                        ),
+                        const SizedBox(height: AppSpacing.lg),
+                        _MetricGrid(profile: _profile!),
+                        const SizedBox(height: AppSpacing.lg),
+                        AppSectionCard(
+                          icon: Icons.auto_awesome_rounded,
+                          iconColor: theme.colorScheme.tertiary,
+                          title: 'Primary Wellness Focus',
+                          subtitle: _focusLabel(_profile!.primaryFocus),
+                          children: [
+                            const SizedBox(height: AppSpacing.sm),
+                            Text(
+                              'Your AI-generated insight',
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _profile!.aiInsight ?? '',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                height: 1.6,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -117,7 +167,7 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
                         label: 'Continue',
                         icon: Icons.arrow_forward_rounded,
                         loading: _busy,
-                        onPressed: _continue,
+                        onPressed: _loading || _error != null ? null : _continue,
                       ),
                       const SizedBox(height: AppSpacing.sm),
                       AppButton(
@@ -133,6 +183,71 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+String _focusLabel(String? focus) => switch (focus) {
+      'STRESS_MANAGEMENT' => 'Stress Management',
+      'SLEEP' => 'Sleep & Rest',
+      'MOOD_SUPPORT' => 'Mood Support',
+      'WELLBEING' => 'Positive Wellbeing',
+      _ => 'Maintain Balance',
+    };
+
+class _ErrorCard extends StatelessWidget {
+  const _ErrorCard({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppSectionCard(
+      icon: Icons.cloud_off_rounded,
+      iconColor: AppColors.error,
+      title: 'Profile unavailable',
+      children: [
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          message,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            height: 1.6,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        AppButton(
+          label: 'Try Again',
+          icon: Icons.refresh_rounded,
+          onPressed: onRetry,
+        ),
+      ],
+    );
+  }
+}
+
+class _PendingCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppSectionCard(
+      icon: Icons.hourglass_top_rounded,
+      iconColor: AppColors.tertiary,
+      title: 'Profile in progress',
+      children: [
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Your assessment has been submitted and stored securely. Your '
+          'personal wellness profile and insights are being prepared and will '
+          'appear here once the secure analysis is complete.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            height: 1.6,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -199,12 +314,14 @@ class _ScoreRing extends StatelessWidget {
 }
 
 class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({required this.report});
+  const _MetricGrid({required this.profile});
 
-  final WellnessReport report;
+  final MindeaseProfile profile;
 
   @override
   Widget build(BuildContext context) {
+    final stressLevel = profile.stressLevel ?? 'LOW';
+    final sleepQuality = profile.sleepQuality ?? 'FAIR';
     return Column(
       children: [
         Row(
@@ -213,11 +330,11 @@ class _MetricGrid extends StatelessWidget {
               child: _Metric(
                 icon: Icons.self_improvement_rounded,
                 label: 'Stress Level',
-                value: report.stressLabel,
-                color: switch (report.stressLevel) {
-                  StressLevel.low => AppColors.success,
-                  StressLevel.moderate => AppColors.warning,
-                  StressLevel.high => AppColors.error,
+                value: _stressLabel(stressLevel),
+                color: switch (stressLevel) {
+                  'HIGH' => AppColors.error,
+                  'MODERATE' => AppColors.warning,
+                  _ => AppColors.success,
                 },
               ),
             ),
@@ -226,7 +343,7 @@ class _MetricGrid extends StatelessWidget {
               child: _Metric(
                 icon: Icons.bolt_rounded,
                 label: 'Lifestyle Score',
-                value: report.lifestyleScore.toString(),
+                value: (profile.lifestyleScore ?? 0).toString(),
                 color: AppColors.info,
               ),
             ),
@@ -239,11 +356,11 @@ class _MetricGrid extends StatelessWidget {
               child: _Metric(
                 icon: Icons.bedtime_rounded,
                 label: 'Sleep Quality',
-                value: report.sleepLabel,
-                color: switch (report.sleepQuality) {
-                  SleepQuality.good => AppColors.success,
-                  SleepQuality.fair => AppColors.warning,
-                  SleepQuality.poor => AppColors.error,
+                value: _sleepLabel(sleepQuality),
+                color: switch (sleepQuality) {
+                  'GOOD' => AppColors.success,
+                  'POOR' => AppColors.error,
+                  _ => AppColors.warning,
                 },
               ),
             ),
@@ -252,7 +369,7 @@ class _MetricGrid extends StatelessWidget {
               child: _Metric(
                 icon: Icons.psychology_alt_rounded,
                 label: 'Focus',
-                value: _shortFocus(report.focusLabel),
+                value: _shortFocus(_focusLabel(profile.primaryFocus)),
                 color: AppColors.tertiary,
               ),
             ),
@@ -261,6 +378,18 @@ class _MetricGrid extends StatelessWidget {
       ],
     );
   }
+
+  String _stressLabel(String value) => switch (value) {
+        'HIGH' => 'High',
+        'MODERATE' => 'Moderate',
+        _ => 'Low',
+      };
+
+  String _sleepLabel(String value) => switch (value) {
+        'GOOD' => 'Good',
+        'POOR' => 'Poor',
+        _ => 'Fair',
+      };
 
   String _shortFocus(String label) => switch (label) {
         'Stress Management' => 'Stress',

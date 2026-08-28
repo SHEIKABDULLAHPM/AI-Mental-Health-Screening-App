@@ -26,9 +26,14 @@ class AuthRepositoryImpl implements AuthRepository {
   Future<AuthSession> login(LoginParams params) async {
     try {
       final data = await _remote.login(params);
+      final accessToken = data['accessToken'] as String?;
+      final refreshToken = data['refreshToken'] as String?;
+      if (accessToken == null || accessToken.isEmpty || refreshToken == null || refreshToken.isEmpty) {
+        throw const ServerFailure('The server returned an invalid response.');
+      }
       final session = AuthSession(
-        accessToken: data['accessToken'] as String,
-        refreshToken: data['refreshToken'] as String,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
         expiresIn: data['expiresIn'] as int? ?? 3600,
       );
       await _storage.write(key: 'access_token', value: session.accessToken);

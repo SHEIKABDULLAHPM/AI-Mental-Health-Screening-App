@@ -14,8 +14,8 @@ class UserModel extends Equatable {
   final List<String> roles;
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
-        id: json['id'] as String,
-        email: json['email'] as String,
+        id: json['id'] as String? ?? '',
+        email: json['email'] as String? ?? '',
         displayName: json['displayName'] as String?,
         roles: (json['roles'] as List<dynamic>? ?? const [])
             .map((e) => e as String)

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:mindease/core/api/journey.dart';
+import 'package:mindease/core/di/app_services.dart';
+import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/storage/app_preferences.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/core/utils/validators.dart';
@@ -51,22 +54,35 @@ class _LoginScreenState extends State<LoginScreen> {
     if (errors.isNotEmpty) return;
 
     setState(() => _busy = true);
-    await Future.delayed(const Duration(milliseconds: 1400));
-    if (!mounted) return;
-
-    if (_email.text.contains('invalid')) {
+    try {
+      final session =
+          await mindeaseApi.login(_email.text.trim(), _password.text);
+      await sessionStore.save(
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+      );
+      final prefs = await AppPreferences.load();
+      await prefs.saveSession(
+        username: session.user.fullName.split(' ').first,
+        remember: _rememberMe,
+      );
+      if (!mounted) return;
+      final destination = await JourneyRouter.nextRoute(session.user);
+      if (!mounted) return;
+      context.go(destination);
+    } on Failure catch (error) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
-        _formError = 'Incorrect email or password. Please try again.';
+        _formError = error.message;
       });
-      return;
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _formError = 'Unable to sign in right now. Please try again.';
+      });
     }
-
-    final prefs = await AppPreferences.load();
-    await prefs.saveSession(
-        username: _email.text.split('@').first, remember: _rememberMe,);
-    if (!mounted) return;
-    context.go('/consent');
   }
 
   @override

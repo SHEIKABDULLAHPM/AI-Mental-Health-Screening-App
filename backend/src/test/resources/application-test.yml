@@ -1,25 +1,34 @@
-# Test profile: no live infra requirements so the context can load in CI.
+# Test profile: no live infrastructure required - repositories are mocked in
+# service tests and the context loads without connecting to real services.
 spring:
   data:
     mongodb:
       uri: mongodb://localhost:27017/test
+      auto-index-creation: false
     redis:
       host: localhost
       port: 6379
       password:
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: guest
-    password: guest
 
 mindease:
+  jwt:
+    # 32-byte dev-only secret (base64) so tests can mint tokens.
+    secret: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    issuer: mindease-test
+  audit:
+    enabled: true
   ai:
-    base-url: http://localhost:8000
-  qdrant:
-    url: http://localhost:6333
-  minio:
-    url: http://localhost:9000
-    access-key: test
-    secret-key: test
-    bucket: test-bucket
+    tasks-queue: ai_tasks
+    max-attempts: 3
+    internal-api-key: test-internal-key
+    claim-timeout: 5m
+    stale-sweep-interval: 60000
+  gemini:
+    api-key: test-key
+    model: gemini-3.5-flash
+    timeout-seconds: 5
+    max-output-tokens: 512
+    temperature: 0.7
+  coach:
+    rag-enabled: false
+    max-conversation-history: 10

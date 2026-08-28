@@ -14,7 +14,13 @@ class QdrantVectorStore:
     def __init__(self) -> None:
         self._client = QdrantClient(url=settings.qdrant_url)
         self._collection = settings.qdrant_collection
+        self._empty_warned = False
+        self._model = None
         self._ensure_collection()
+
+    def warm(self) -> None:
+        """Load the embedding model once so the first job is not stalled."""
+        self._embed([""])
 
     def _ensure_collection(self) -> None:
         try:
@@ -33,9 +39,10 @@ class QdrantVectorStore:
     def _embed(self, texts: list[str]) -> list[list[float]]:
         try:
             from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(settings.embedding_model)
-            return [v.tolist() for v in model.encode(texts)]
-        except Exception as exc:  # noqa: BLE001
+            if self._model is None:
+                self._model = SentenceTransformer(settings.embedding_model)
+            return [v.tolist() for v in self._model.encode(texts)]
+        except Exception as exc:
             raise EmbeddingError(f"embedding failed: {exc}") from exc
 
     def upsert(self, points: list[dict]) -> None:
@@ -55,6 +62,15 @@ class QdrantVectorStore:
 
     def search(self, query: str, *, top_k: int = 5) -> list[str]:
         try:
+            if self._collection_empty():
+                if not self._empty_warned:
+                    log.warning(
+                        "rag_collection_empty",
+                        collection=self._collection,
+                        hint="run the rag-seed / seed_vectors.py step before relying on RAG",
+                    )
+                    self._empty_warned = True
+                return []
             vector = self._embed([query])[0]
             hits = self._client.query_points(
                 collection_name=self._collection,
@@ -62,5 +78,15 @@ class QdrantVectorStore:
                 limit=top_k,
             ).points
             return [h.payload.get("text", "") for h in hits if h.payload]
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise RAGSearchError(f"qdrant search failed: {exc}") from exc
+
+    def _collection_empty(self) -> bool:
+        try:
+            return self._client.count(
+                collection_name=self._collection, exact=True
+            ).count == 0
+        except Exception:
+            msg = "qdrant_count_failed"
+            log.warning(msg, exc_info=True)
+            return False

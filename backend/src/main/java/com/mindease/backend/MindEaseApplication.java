@@ -2,13 +2,15 @@ package com.mindease.backend;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * MindEase backend entry point.
+ * Synora backend entry point.
  */
 @SpringBootApplication
-@EnableAsync
+@ConfigurationPropertiesScan
+@EnableScheduling
 public class MindEaseApplication {
 
     public static void main(String[] args) {

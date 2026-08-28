@@ -1,4 +1,6 @@
 """OpenAI-backed LLM implementation."""
+from typing import Any
+
 from openai import AsyncOpenAI
 
 from app.config import settings
@@ -30,15 +32,21 @@ class OpenAILLMClient(LLMClient):
             log.error("llm_complete_failed", error=str(exc))
             raise LLMError(f"LLM call failed: {exc}") from exc
 
+    async def complete_json(
+        self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int = 1024
+    ) -> dict[str, Any]:
+        from app.core.llm.gemini_client import _extract_json_object
+
+        text = await self.complete(system, user, max_tokens=max_tokens)
+        parsed = _extract_json_object(text)
+        if parsed is None:
+            log.error("llm_json_invalid", snippet=text[:500])
+            raise LLMError("LLM returned invalid JSON.")
+        return parsed
+
     async def is_available(self) -> bool:
         try:
             await self._client.models.retrieve(self._model)
             return True
         except Exception:  # noqa: BLE001
             return False
-
-
-def build_llm_client() -> LLMClient:
-    if not settings.openai_api_key or settings.openai_api_key.startswith("sk-change"):
-        return OpenAILLMClient()  # still returns error responses if unset
-    return OpenAILLMClient()

@@ -1,9 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.ratelimit import rate_limited
 from app.core.risk import HeuristicRiskAssessor
 from app.schemas.models import RiskRequest
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(rate_limited)])
 
 
 @router.post("/assess", summary="Assess clinical risk level")

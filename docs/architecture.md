@@ -1,4 +1,4 @@
-# MindEase Architecture
+# Synora Architecture
 
 ## System overview
 

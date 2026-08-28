@@ -1,5 +1,5 @@
 # ============================================================================
-# MindEase - DEFAULT entry point (development stack).
+# Synora - DEFAULT entry point (development stack).
 # `docker compose up -d --build` from the repo root uses this file.
 # It merges the shared base definitions with the dev overlay.
 # ============================================================================

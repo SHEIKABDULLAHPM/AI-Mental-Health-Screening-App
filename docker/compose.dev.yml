@@ -1,5 +1,5 @@
 # ============================================================================
-# MindEase - Development overlay
+# Synora - Development overlay
 # Adds localhost-only debug ports for infra, hot reload, and dev conveniences.
 # Run from repo root:
 #   docker compose -f docker/compose.base.yml -f docker/compose.dev.yml up -d --build
@@ -32,12 +32,51 @@ services:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
 
+  # ------------------------------------------------------------- Mailcatcher
+  # Dev-only SMTP inbox so the forgot-password flow can be verified without a
+  # real mail server. The backend's MAIL_HOST points here (see .env). Only the
+  # HTTP inbox is published; SMTP stays on the internal network. Never used in
+  # production (it lives here, not in compose.base.yml or prod).
+  mailcatcher:
+    build:
+      context: ../docker/mailcatcher
+      dockerfile: Dockerfile
+    container_name: mindease-mailcatcher
+    restart: unless-stopped
+    networks: [frontend, internal]
+    ports:
+      - "8025:8025"
+    environment:
+      SMTP_PORT: "1025"
+      HTTP_PORT: "8025"
+
   backend:
+    depends_on:
+      mailcatcher:
+        condition: service_started
     environment:
       SPRING_PROFILES_ACTIVE: dev
       LOGGING_LEVEL_COM_MINDEASE: DEBUG
+      # Dev mailcatcher delivers reset OTPs to a local inbox (docker/mailcatcher).
+      # Auth/STARTTLS are disabled because the catcher is a plain, in-network server.
+      # Production sets real MAIL_* values; base.yml is untouched.
+      MAIL_HOST: ${MAIL_HOST:-mailcatcher}
+      MAIL_PORT: ${MAIL_PORT:-1025}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_FROM: ${MAIL_FROM:-mindease@dev.local}
+      MAIL_SMTP_AUTH: ${MAIL_SMTP_AUTH:-false}
+      MAIL_SMTP_STARTTLS: ${MAIL_SMTP_STARTTLS:-false}
+      MAIL_HEALTH_ENABLED: ${MAIL_HEALTH_ENABLED:-false}
 
   ai-service:
+    ports:
+      # Local dev only - bound to localhost, never 0.0.0.0 (no public LLM/RAG
+      # surface). Production runs without any host-published AI-service port.
+      - "127.0.0.1:${AI_SERVICE_PORT:-8000}:8000"
     environment:
       APP_ENV: development
       AI_LOG_LEVEL: DEBUG
+      # Local Flutter web/desktop builds run the AI service cross-origin from
+      # localhost on dynamic ports; the regex keeps that working without "*".
+      CORS_ALLOW_ORIGIN_REGEX: ${CORS_ALLOW_ORIGIN_REGEX:-^(http://localhost|http://127\.0\.0\.1)(:\d+)?$}

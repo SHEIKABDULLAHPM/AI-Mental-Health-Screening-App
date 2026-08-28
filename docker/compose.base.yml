@@ -1,5 +1,5 @@
 # ============================================================================
-# MindEase - Base Docker Compose (shared by dev & prod entry points)
+# Synora - Base Docker Compose (shared by dev & prod entry points)
 # The project `name` is declared in the *entry* file (docker-compose.yml or
 # docker-compose.prod.yml) so dev and prod never share containers/networks.
 # All values come from the root .env file (cp .env.example .env).
@@ -70,7 +70,7 @@ services:
       timeout: 10s
       retries: 10
 
-  # ----------------------------------------------------------- Qdrant (RAG)
+  # ------------------------------------------------------------- Qdrant (RAG)
   qdrant:
     image: qdrant/qdrant:v1.9.7
     container_name: mindease-qdrant
@@ -88,6 +88,27 @@ services:
       timeout: 10s
       retries: 12
       start_period: 15s
+
+  # ------------------------------------------------------ RAG KB seeding
+  # Populates the Qdrant `mindease_chunks` collection from the curated
+  # knowledge-base (NICE/NIMH/WHO PDFs) so RAG grounding is never silently
+  # empty. Reuses the ai-service image (same embedding model + Qdrant client).
+  # Idempotent; runs once per `docker compose up`.
+  rag-seed:
+    image: ${AI_SERVICE_IMAGE:-mindease/ai-service:local}
+    container_name: mindease-rag-seed
+    restart: "no"
+    networks: [internal]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    volumes:
+      - ../knowledge-base:/app/knowledge-base:ro
+    environment:
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-mindease_chunks}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+    command: ["sh", "-c", "python scripts/seed_vectors.py --kb-dir /app/knowledge-base"]
 
   # ------------------------------------------------------------- MinIO (S3)
   minio:
@@ -183,12 +204,19 @@ services:
       AI_SERVICE_URL: http://ai-service:8000/api/v1
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       MINIO_URL: ${MINIO_URL:-http://minio:9000}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-mindease}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set in .env}
       MINIO_BUCKET: ${MINIO_BUCKET:-mindease-files}
       JWT_ISSUER: ${JWT_ISSUER:?set in .env}
       JWT_JWKS_URI: ${JWT_JWKS_URI:?set in .env}
       RABBITMQ_QUEUE_AI_TASKS: ${RABBITMQ_QUEUE_AI_TASKS:-ai_tasks}
+      AI_INTERNAL_API_KEY: ${AI_INTERNAL_API_KEY:?set in .env (shared secret with ai-service)}
+      AI_JOBS_MAX_ATTEMPTS: ${AI_JOBS_MAX_ATTEMPTS:-3}
+      AI_JOBS_CLAIM_TIMEOUT: ${AI_JOBS_CLAIM_TIMEOUT:-5m}
+      AI_JOBS_STALE_SWEEP_INTERVAL: ${AI_JOBS_STALE_SWEEP_INTERVAL:-60000}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     healthcheck:
@@ -207,21 +235,36 @@ services:
     container_name: mindease-ai-service
     restart: unless-stopped
     networks: [frontend, internal]
+    depends_on:
+      rag-seed:
+        condition: service_completed_successfully
     environment:
       <<: *common-env
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?set in .env}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      CORS_ALLOW_ORIGIN_REGEX: ${CORS_ALLOW_ORIGIN_REGEX:-}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080/api/v1/internal}
+      AI_INTERNAL_API_KEY: ${AI_INTERNAL_API_KEY:?set in .env (shared secret with backend)}
+      AI_JOBS_MAX_ATTEMPTS: ${AI_JOBS_MAX_ATTEMPTS:-3}
+      CALLBACK_ATTEMPTS: ${CALLBACK_ATTEMPTS:-3}
+      CALLBACK_BACKOFF_SECONDS: ${CALLBACK_BACKOFF_SECONDS:-2}
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-mindease}
       RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?set in .env}
+      AI_TASKS_QUEUE: ${RABBITMQ_QUEUE_AI_TASKS:-ai_tasks}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-mindease_chunks}
+      RAG_ENABLED: ${RAG_ENABLED:-true}
       REDIS_URI: redis://:${REDIS_PASSWORD:?set in .env}@redis:6379
-    ports:
-      - "${AI_SERVICE_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 15s

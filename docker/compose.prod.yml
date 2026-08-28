@@ -1,5 +1,5 @@
 # ============================================================================
-# MindEase - Production-ready overlay
+# Synora - Production-ready overlay
 # Run from repo root:
 #   docker compose -f docker-compose.prod.yml up -d --build
 # TLS / edge proxying is handled by an external reverse proxy in front of

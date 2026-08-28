@@ -1,4 +1,4 @@
-# MindEase — AI Mental Health Screening & Support Guidance
+# Synora — AI Mental Health Screening & Support Guidance
 
 A full-stack, containerized platform for evidence-based mental health
 screening with AI-driven, evidence-grounded support guidance.
@@ -41,7 +41,7 @@ Spot-check the API:
 
 ```bash
 curl http://localhost:8080/actuator/health          # backend + infra health
-curl http://localhost:8000/api/v1/risk/assess \
+curl http://localhost:8000/api/v1/risk/assess \     # AI service (dev-only, 127.0.0.1)
   -H 'Content-Type: application/json' \
   -d '{"screening_score":{"phq9":20},"contextual_flags":["hopeless"]}'
 ```
@@ -61,8 +61,10 @@ curl http://localhost:8000/api/v1/risk/assess \
 
 **Security:** MongoDB, Redis, RabbitMQ, Qdrant and MinIO are *not* published on
 the `internal` Docker network. Dev-only debug ports are bound strictly to
-`127.0.0.1`; the production overlay exposes none of them. Only the backend, AI
-service and Keycloak are reachable from the host on the `frontend` network.
+`127.0.0.1`; the production overlay exposes none of them. Only the backend and
+Keycloak are reachable from the host; the AI service has **no host-published
+port in production** (it is reached internally over the Docker networks, and on
+`127.0.0.1` only in the dev overlay).
 
 ## Stop
 
@@ -87,7 +89,10 @@ docker compose logs -f backend ai-service
 ## Environments & secrets
 
 - Root `.env` carries all configuration; copy from `.env.example` and change
-  every `change-me-*` value and `sk-change-me` key.
+  every `change-me-*` value. `GEMINI_API_KEY` (for the default Gemini provider)
+  and the shared `AI_INTERNAL_API_KEY` secret are both required - the backend
+  refuses to start with a blank/placeholder internal key outside the dev/test
+  profiles.
 - Each service folder also ships a `.env.example` (see `ai-service/.env.example`).
 - Never commit the real `.env` (ignored by `.gitignore`).
 

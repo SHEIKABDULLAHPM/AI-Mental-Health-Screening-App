@@ -1,12 +1,10 @@
 package com.mindease.backend.common.error;
 
-import lombok.Getter;
 import org.springframework.http.HttpStatus;
 
 /**
  * Base business/technical exception carrying a stable error code.
  */
-@Getter
 public class ApiException extends RuntimeException {
 
     private final ErrorCode code;
@@ -18,6 +16,18 @@ public class ApiException extends RuntimeException {
         this.code = code;
         this.status = code.status();
         this.codeName = code.name();
+    }
+
+    public ErrorCode getCode() {
+        return code;
+    }
+
+    public HttpStatus getStatus() {
+        return status;
+    }
+
+    public String getCodeName() {
+        return codeName;
     }
 
     public static ApiException notFound(String message) {

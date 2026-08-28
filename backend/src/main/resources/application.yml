@@ -1,7 +1,6 @@
 # ============================================================================
-# MindEase backend - application configuration.
+# Synora backend - application configuration.
 # Real values are injected via environment variables (see compose.base.yml).
-# Profiles: dev (local/debug) and prod (defaults safe).
 # ============================================================================
 spring:
   application.name: mindease-backend
@@ -9,67 +8,114 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://mindease:change-me@mongo:27017/mindease?authSource=admin}
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://mindease:change-me@mongo:27017/mindease?authSource=admin}
       auto-index-creation: true
-
     redis:
       host: ${SPRING_DATA_REDIS_HOST:redis}
       port: ${SPRING_DATA_REDIS_PORT:6379}
       password: ${SPRING_DATA_REDIS_PASSWORD:}
       timeout: 2s
 
+  # Password-reset email (SMTP). When unset the backend skips e-mail delivery
+  # but the reset flow still completes, so local/dev runs never need a server.
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    from: ${MAIL_FROM:mindease@localhost}
+    properties:
+      mail.smtp.auth: ${MAIL_SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${MAIL_SMTP_STARTTLS:true}
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  # AI job queue transport.
   rabbitmq:
-    host: ${RABBITMQ_HOST:rabbitmq}
-    port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:mindease}
-    password: ${RABBITMQ_PASSWORD:change-me}
-    virtual-host: ${RABBITMQ_VHOST:/}
-    listener.simple.retry.enabled: true
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:mindease}
+    password: ${SPRING_RABBITMQ_PASSWORD:change-me-dev-rabbit}
 
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: ${JWT_ISSUER:http://localhost:8081/realms/mindease}
-          jwk-set-uri: ${JWT_JWKS_URI:http://keycloak:8080/realms/mindease/protocol/openid-connect/certs}
-
-# ---------------------------------------------------------------------------
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
 
-# ---------------------------------------------------------------------------
 management:
   endpoints.web.exposure.include: health,info,metrics,prometheus
   endpoint.health.show-details: always
   health:
     mongo.enabled: true
     redis.enabled: true
-    rabbit.enabled: true
+    mail.enabled: ${MAIL_HEALTH_ENABLED:false}
     readiness-state.enabled: true
 
 # ---------------------------------------------------------------------------
-# External integrations
 mindease:
+  jwt:
+    # Base64-encoded HMAC secret (>= 256 bits). The default is a dev-only
+    # placeholder — always override MINDEASE_JWT_SECRET outside local runs.
+    secret: ${MINDEASE_JWT_SECRET:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+    issuer: ${JWT_ISSUER:mindease}
+    access-expiration: ${JWT_ACCESS_TTL:15m}
+    refresh-expiration: ${JWT_REFRESH_TTL:7d}
+
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
+
+  rate-limit:
+    default-limit: ${RATE_LIMIT_DEFAULT:120}
+    auth-limit: ${RATE_LIMIT_AUTH:10}
+    window: ${RATE_LIMIT_WINDOW:1m}
+
+  otp:
+    length: ${OTP_LENGTH:6}
+    expiration: ${OTP_EXPIRATION:10m}
+    max-attempts: ${OTP_MAX_ATTEMPTS:5}
+
+  audit:
+    enabled: ${AUDIT_ENABLED:true}
+
   ai:
-    base-url: ${AI_SERVICE_URL:http://ai-service:8000/api/v1}
-    connect-timeout: 5s
-    read-timeout: 60s
-  qdrant:
-    url: ${QDRANT_URL:http://qdrant:6333}
-  minio:
+    tasks-queue: ${RABBITMQ_QUEUE_AI_TASKS:ai_tasks}
+    max-attempts: ${AI_JOBS_MAX_ATTEMPTS:3}
+    # Required - no safe default. Supplied via AI_INTERNAL_API_KEY; the
+    # InternalKeyStartupValidator fails startup on a blank/placeholder key
+    # outside the dev and test profiles.
+    internal-api-key: ${AI_INTERNAL_API_KEY:}
+    claim-timeout: ${AI_JOBS_CLAIM_TIMEOUT:5m}
+    stale-sweep-interval: ${AI_JOBS_STALE_SWEEP_INTERVAL:60000}
+    service-url: ${AI_SERVICE_URL:http://mindease-ai-service:8000}
+
+  gemini:
+    api-key: ${GEMINI_API_KEY:}
+    model: ${GEMINI_MODEL:gemini-3.5-flash}
+    timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:30}
+    max-output-tokens: ${GEMINI_MAX_OUTPUT_TOKENS:1024}
+    temperature: ${GEMINI_TEMPERATURE:0.7}
+
+  coach:
+    rag-enabled: ${COACH_RAG_ENABLED:true}
+    max-conversation-history: ${COACH_MAX_HISTORY:20}
+
+  media:
     url: ${MINIO_URL:http://minio:9000}
+    # Public address used in presigned image/audio URLs. This must be reachable
+    # from the mobile client; the internal Docker hostname is not.
+    public-url: ${MINIO_PUBLIC_URL:}
     access-key: ${MINIO_ACCESS_KEY:mindease}
-    secret-key: ${MINIO_SECRET_KEY:change-me}
+    secret-key: ${MINIO_SECRET_KEY:change-me-dev-minio}
     bucket: ${MINIO_BUCKET:mindease-files}
-  rabbitmq:
-    queue-ai-tasks: ${RABBITMQ_QUEUE_AI_TASKS:ai_tasks}
 
 # ---------------------------------------------------------------------------
 logging:
   level:
     root: INFO
     com.mindease: ${LOGGING_LEVEL_COM_MINDEASE:DEBUG}
+    AUDIT: INFO
   pattern.console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
 
 ---

@@ -452,3 +452,11 @@ patent drafts are unpublished filing material. Both remain untracked locally.
    distribution. This is a product decision.
 7. **Journal search ceiling.** 20,000 rows per request; beyond that the API says
    more may exist and logs a warning. Acceptable for the expected archive size.
+
+### I5. Publication
+
+This pass was committed as **`293deb1`** and pushed to the public branch
+[`sheikabdullah/corefeature`](https://github.com/SHEIKABDULLAHPM/AI-Mental-Health-Screening-App/commit/293deb147567ef60220e35822822b2588b4cb857).
+The remote tree contains 884 files and was checked to contain no FER weights,
+no personal screenshots, no patent drafts and no secret material. All changes
+remain single-database and ownership-scoped; no multi-tenancy work was done.

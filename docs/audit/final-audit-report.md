@@ -455,7 +455,8 @@ patent drafts are unpublished filing material. Both remain untracked locally.
 
 ### I5. Publication
 
-This pass was committed as **`293deb1`** and pushed to the public branch
+This pass was committed as **`293deb1`** (documentation follow-up `923737c`)
+and pushed to the public branch
 [`sheikabdullah/corefeature`](https://github.com/SHEIKABDULLAHPM/AI-Mental-Health-Screening-App/commit/293deb147567ef60220e35822822b2588b4cb857).
 The remote tree contains 884 files and was checked to contain no FER weights,
 no personal screenshots, no patent drafts and no secret material. All changes

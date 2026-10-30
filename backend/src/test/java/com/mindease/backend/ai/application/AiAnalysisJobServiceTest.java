@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,6 +35,9 @@ import com.mindease.backend.ai.dto.AiAnalysisResultRequest;
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
 import com.mindease.backend.config.AppProperties;
+import com.mindease.backend.screening.domain.Screening;
+import com.mindease.backend.screening.domain.ScreeningRepository;
+import com.mindease.backend.wellness.application.WellnessAnalysisService;
 import com.mindease.backend.wellness.application.WellnessProfileService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -54,6 +58,12 @@ class AiAnalysisJobServiceTest {
     @Mock
     private WellnessProfileService profiles;
 
+    @Mock
+    private ScreeningRepository screenings;
+
+    @Mock
+    private WellnessAnalysisService analysis;
+
     private AiAnalysisJobService service;
     private Queue queue;
     private AppProperties props;
@@ -69,7 +79,8 @@ class AiAnalysisJobServiceTest {
         queue = new Queue("ai_tasks", true);
         MeterRegistry meterRegistry = new SimpleMeterRegistry();
         service = new AiAnalysisJobService(
-                jobs, rabbit, queue, props, new ObjectMapper(), profiles, meterRegistry);
+                jobs, rabbit, queue, props, new ObjectMapper(), profiles,
+                screenings, analysis, meterRegistry);
     }
 
     // ------------------------------------------------------------------ create
@@ -151,7 +162,7 @@ class AiAnalysisJobServiceTest {
         assertThat(completed.getAiInsight()).isEqualTo(VALID_INSIGHT);
         assertThat(completed.getCompletedAt()).isNotNull();
         verify(profiles).completeFromJob(eq(OWNER), eq("assessment-1"), anyInt(), eq("HIGH"),
-                anyInt(), eq("FAIR"), eq("STRESS_MANAGEMENT"), eq(VALID_INSIGHT));
+                anyInt(), eq("FAIR"), eq("STRESS_MANAGEMENT"), eq(VALID_INSIGHT), isNull());
     }
 
     @Test
@@ -245,6 +256,58 @@ class AiAnalysisJobServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(AiJobStatus.COMPLETED);
         verify(jobs, never()).save(any());
+    }
+
+    @Test
+    void failPublishesDeterministicFallbackSoProfileIsNotStrandedPending() {
+        AiAnalysisJob processing = job(AiJobStatus.PROCESSING, 1);
+        when(jobs.findById(JOB_ID)).thenReturn(Optional.of(processing));
+        when(jobs.save(any())).thenReturn(processing);
+
+        Screening screening = new Screening();
+        screening.setId("assessment-1");
+        screening.setUserId(OWNER);
+        when(screenings.findById("assessment-1")).thenReturn(Optional.of(screening));
+        WellnessAnalysisService.Analysis fallback = new WellnessAnalysisService.Analysis(
+                58, "MODERATE", 80, "GOOD", "BALANCE", "A deterministic fallback insight.");
+        when(analysis.analyze(screening)).thenReturn(fallback);
+
+        service.fail(JOB_ID, "LLM timeout");
+
+        verify(analysis).analyze(screening);
+        verify(profiles).completeFor(OWNER, "assessment-1", fallback);
+    }
+
+    @Test
+    void expireMarksQueuedJobFailedAndPublishesFallback() {
+        AiAnalysisJob queued = job(AiJobStatus.QUEUED, 0);
+        when(jobs.findById(JOB_ID)).thenReturn(Optional.of(queued));
+        when(jobs.save(any())).thenReturn(queued);
+
+        Screening screening = new Screening();
+        screening.setId("assessment-1");
+        screening.setUserId(OWNER);
+        when(screenings.findById("assessment-1")).thenReturn(Optional.of(screening));
+        WellnessAnalysisService.Analysis fallback = new WellnessAnalysisService.Analysis(
+                58, "MODERATE", 80, "GOOD", "BALANCE", "A deterministic fallback insight.");
+        when(analysis.analyze(screening)).thenReturn(fallback);
+
+        AiAnalysisJob expired = service.expire(JOB_ID, "stale");
+
+        assertThat(expired.getStatus()).isEqualTo(AiJobStatus.FAILED);
+        verify(profiles).completeFor(OWNER, "assessment-1", fallback);
+    }
+
+    @Test
+    void expireIgnoresAlreadyCompletedJob() {
+        AiAnalysisJob completed = job(AiJobStatus.COMPLETED, 1);
+        when(jobs.findById(JOB_ID)).thenReturn(Optional.of(completed));
+
+        AiAnalysisJob result = service.expire(JOB_ID, "stale");
+
+        assertThat(result.getStatus()).isEqualTo(AiJobStatus.COMPLETED);
+        verify(jobs, never()).save(any());
+        verify(profiles, never()).completeFor(anyString(), anyString(), any());
     }
 
     // ------------------------------------------------------------------ retry

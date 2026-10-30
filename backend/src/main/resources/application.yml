@@ -79,6 +79,16 @@ mindease:
   audit:
     enabled: ${AUDIT_ENABLED:true}
 
+  journal:
+    # AES-256-GCM key material for journal title/body at rest, derived with
+    # SHA-256. Required outside dev/test (see JournalEncryptionStartupValidator).
+    encryption-key: ${JOURNAL_ENCRYPTION_KEY:}
+    migrate-plaintext: ${JOURNAL_MIGRATE_PLAINTEXT:true}
+
+  combined:
+    # Redis TTL for the combined mental + physical insight (AI call cache).
+    cache-ttl: ${COMBINED_INSIGHT_CACHE_TTL:30m}
+
   ai:
     tasks-queue: ${RABBITMQ_QUEUE_AI_TASKS:ai_tasks}
     max-attempts: ${AI_JOBS_MAX_ATTEMPTS:3}
@@ -88,7 +98,10 @@ mindease:
     internal-api-key: ${AI_INTERNAL_API_KEY:}
     claim-timeout: ${AI_JOBS_CLAIM_TIMEOUT:5m}
     stale-sweep-interval: ${AI_JOBS_STALE_SWEEP_INTERVAL:60000}
-    service-url: ${AI_SERVICE_URL:http://mindease-ai-service:8000}
+    # Clients append endpoint paths (e.g. /mood/analyze) directly, so the
+    # default MUST keep the /api/v1 suffix like the code-level defaults do;
+    # without it bare local runs build unprefixed URLs that 404.
+    service-url: ${AI_SERVICE_URL:http://mindease-ai-service:8000/api/v1}
 
   gemini:
     api-key: ${GEMINI_API_KEY:}
@@ -102,13 +115,20 @@ mindease:
     max-conversation-history: ${COACH_MAX_HISTORY:20}
 
   media:
-    url: ${MINIO_URL:http://minio:9000}
+    url: ${MINIO_URL:http://minio:9090}
     # Public address used in presigned image/audio URLs. This must be reachable
     # from the mobile client; the internal Docker hostname is not.
     public-url: ${MINIO_PUBLIC_URL:}
     access-key: ${MINIO_ACCESS_KEY:mindease}
     secret-key: ${MINIO_SECRET_KEY:change-me-dev-minio}
     bucket: ${MINIO_BUCKET:mindease-files}
+    # AES-256-GCM key material for journal media (image/audio/video) at rest,
+    # derived with SHA-256 and sealed in 1 MiB chunks. When blank, media is
+    # stored unencrypted exactly as before.
+    encryption-key: ${MEDIA_ENCRYPTION_KEY:}
+    # Signing secret for the per-object download token; falls back to the
+    # encryption key when unset.
+    access-secret: ${MEDIA_ACCESS_SECRET:}
 
 # ---------------------------------------------------------------------------
 logging:

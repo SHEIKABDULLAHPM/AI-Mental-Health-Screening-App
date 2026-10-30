@@ -51,6 +51,13 @@ static const _jobStates = {
   String? _jobId;
   int _unknownPolls = 0;
 
+  /// Consecutive polls that returned a known non-terminal state. Bounded so
+  /// a job stuck server-side surfaces the retry card instead of polling
+  /// forever with no way out (90 polls x 2 s = ~3 min; real analyses finish
+  /// in seconds and the server sweeper fails stale jobs at 5 min).
+  int _pendingPolls = 0;
+  static const _maxPendingPolls = 90;
+
   @override
   void initState() {
     super.initState();
@@ -120,6 +127,15 @@ static const _jobStates = {
     }
 
     if (_jobStates.contains(state)) {
+      _pendingPolls += 1;
+      if (_pendingPolls > _maxPendingPolls) {
+        // Still not terminal after minutes: stop polling and offer retry
+        // instead of spinning indefinitely.
+        _pollTimer?.cancel();
+        if (!mounted) return;
+        setState(() => _failed = true);
+        return;
+      }
       _schedulePoll();
     }
   }
@@ -149,6 +165,7 @@ static const _jobStates = {
         _retrying = false;
         _failed = false;
       });
+      _pendingPolls = 0;
       _schedulePoll();
     } on Object {
       if (!mounted) return;
@@ -174,6 +191,15 @@ static const _jobStates = {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
+      // Minimal exit: polling stops on dispose and the server-side job is
+      // unaffected, so leaving can never lose or corrupt the analysis.
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: CloseButton(
+          onPressed: () => context.go('/dashboard'),
+        ),
+      ),
       body: AppBackdrop(
         child: SafeArea(
           child: Padding(

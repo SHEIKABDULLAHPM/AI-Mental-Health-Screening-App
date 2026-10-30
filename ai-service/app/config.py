@@ -16,7 +16,9 @@ class _LenientEnvSource(EnvSettingsSource):
         try:
             return super().decode_complex_value(field_name, field, value)
         except (json.JSONDecodeError, ValueError):
-            if field_name == "cors_allowed_origins" and isinstance(value, str):
+            if field_name in ("cors_allowed_origins", "emotion_labels") and isinstance(
+                value, str
+            ):
                 return [p.strip() for p in value.split(",") if p.strip()]
             raise
 
@@ -53,7 +55,14 @@ class Settings(BaseSettings):
     cors_allowed_origins: list[str] = []
     cors_allow_origin_regex: str = ""
 
-    # Throttling for the unauthenticated /api/v1 endpoints (per client IP).
+    # Inbound authentication for /api/v1. Enabled in deployed environments so
+    # only the backend (which holds the shared key) can call the service.
+    # /health stays public for orchestrator probes.
+    inbound_auth_required: bool = Field(
+        default=False, validation_alias="AI_INBOUND_AUTH_REQUIRED"
+    )
+
+    # Throttling for the /api/v1 endpoints (per client IP).
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 120
 
@@ -91,8 +100,32 @@ class Settings(BaseSettings):
     rabbitmq_password: str = "change-me"
     ai_tasks_queue: str = "ai_tasks"
 
-    # Cache
-    redis_uri: str = "redis://:change-me@redis:6379"
+    # Server-side facial emotion inference (vit_fer_fp16.tflite, ViT-B/16).
+    #
+    # emotion_labels MUST stay in the model's own id2label order. This is NOT
+    # the FER2013 order: positions 5/6 are neutral, sad here. Reordering
+    # silently mislabels three of seven classes with no runtime error.
+    # Same vocabulary and ordering as the Flutter client and Spring backend.
+    emotion_enabled: bool = True
+    emotion_model_path: str = "app/models/vit_fer_fp16.tflite"
+    emotion_model_version: str = "vit-fer-7"
+    emotion_labels: list[str] = [
+        "anger",
+        "disgust",
+        "fear",
+        "happy",
+        "neutral",
+        "sad",
+        "surprise",
+    ]
+    # Gates mirror the on-device pipeline (0.60 / 0.10) and are justified by
+    # the 175-image validation replay: 90.3% single-frame emission with all
+    # seven classes reachable. Do not lower these to raise hit counts.
+    emotion_confidence_threshold: float = 0.6
+    emotion_margin_threshold: float = 0.10
+    emotion_normalization: str = "mean_std_0.5"  # mean_std_0.5 [-1,1] | div255 [0,1]
+    emotion_threads: int = 2
+    emotion_max_image_mb: float = 5.0
 
 
 settings = Settings()

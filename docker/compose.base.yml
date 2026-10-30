@@ -96,9 +96,12 @@ services:
   # Idempotent; runs once per `docker compose up`.
   rag-seed:
     image: ${AI_SERVICE_IMAGE:-mindease/ai-service:local}
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
     container_name: mindease-rag-seed
     restart: "no"
-    networks: [internal]
+    networks: [frontend, internal]
     depends_on:
       qdrant:
         condition: service_healthy
@@ -108,46 +111,43 @@ services:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-mindease_chunks}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      # Use the embedding model baked into the image (/app/model-cache).
+      # Without these, sentence-transformers re-checks huggingface.co on every
+      # load; this container must not depend on runtime model downloads.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
     command: ["sh", "-c", "python scripts/seed_vectors.py --kb-dir /app/knowledge-base"]
 
-  # ------------------------------------------------------------- MinIO (S3)
+  # ------------------------------------------------------- S3 storage (S3Mock)
+  # S3-compatible object storage for media uploads (replaces MinIO, whose
+  # images are no longer publicly pullable from Docker Hub or Quay.io).
+  # The backend uses the generic AWS S3 SDK with path-style access, so no
+  # backend code changes are needed. The app bucket is auto-created at
+  # startup via COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS, which
+  # replaces the old minio-init/mc step. Dev-only: never use in production
+  # with real user data (S3Mock is a testing tool, no auth on objects).
   minio:
-    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    image: adobe/s3mock:latest
     container_name: mindease-minio
     restart: unless-stopped
-    networks: [internal]
-    command: server /data --console-address ":9001"
+    # frontend membership is required for the dev overlay's localhost port
+    # publish to take effect (Docker ignores published ports on
+    # internal-only containers) and so client-facing presigned S3 URLs
+    # (MINIO_PUBLIC_URL) stay reachable. S3Mock accepts any credentials and
+    # is dev-only - never expose it beyond 127.0.0.1.
+    networks: [frontend, internal]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-mindease}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+      COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /s3mockroot
+      COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: "true"
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: ${MINIO_BUCKET:-mindease-files}
     volumes:
-      - minio-data:/data
+      - s3mock-data:/s3mockroot
     healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/favicon.ico"]
       interval: 15s
       timeout: 10s
       retries: 10
-
-  # ------------------------------------------------------------ MinIO setup
-  minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
-    container_name: mindease-minio-init
-    restart: "no"
-    networks: [internal]
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
-      mc mb --ignore-existing local/$$MINIO_BUCKET &&
-      mc anonymous set none local/$$MINIO_BUCKET &&
-      echo 'MinIO ready.' ;
-      "
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-mindease}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
-      MINIO_BUCKET: ${MINIO_BUCKET:-mindease-files}
+      start_period: 10s
 
   # ---------------------------------------------------------------- Keycloak
   keycloak:
@@ -203,7 +203,7 @@ services:
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?set in .env}
       AI_SERVICE_URL: http://ai-service:8000/api/v1
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
-      MINIO_URL: ${MINIO_URL:-http://minio:9000}
+      MINIO_URL: ${MINIO_URL:-http://minio:9090}
       MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-mindease}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set in .env}
@@ -215,6 +215,10 @@ services:
       AI_JOBS_MAX_ATTEMPTS: ${AI_JOBS_MAX_ATTEMPTS:-3}
       AI_JOBS_CLAIM_TIMEOUT: ${AI_JOBS_CLAIM_TIMEOUT:-5m}
       AI_JOBS_STALE_SWEEP_INTERVAL: ${AI_JOBS_STALE_SWEEP_INTERVAL:-60000}
+      JOURNAL_ENCRYPTION_KEY: ${JOURNAL_ENCRYPTION_KEY:?set in .env (journal at-rest key)}
+      MEDIA_ENCRYPTION_KEY: ${MEDIA_ENCRYPTION_KEY:-}
+      JOURNAL_MIGRATE_PLAINTEXT: ${JOURNAL_MIGRATE_PLAINTEXT:-true}
+      COMBINED_INSIGHT_CACHE_TTL: ${COMBINED_INSIGHT_CACHE_TTL:-30m}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
     ports:
@@ -253,6 +257,7 @@ services:
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8080/api/v1/internal}
       AI_INTERNAL_API_KEY: ${AI_INTERNAL_API_KEY:?set in .env (shared secret with backend)}
+      AI_INBOUND_AUTH_REQUIRED: ${AI_INBOUND_AUTH_REQUIRED:-true}
       AI_JOBS_MAX_ATTEMPTS: ${AI_JOBS_MAX_ATTEMPTS:-3}
       CALLBACK_ATTEMPTS: ${CALLBACK_ATTEMPTS:-3}
       CALLBACK_BACKOFF_SECONDS: ${CALLBACK_BACKOFF_SECONDS:-2}
@@ -264,7 +269,17 @@ services:
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-mindease_chunks}
       RAG_ENABLED: ${RAG_ENABLED:-true}
-      REDIS_URI: redis://:${REDIS_PASSWORD:?set in .env}@redis:6379
+      EMOTION_ENABLED: ${EMOTION_ENABLED:-true}
+      EMOTION_MODEL_PATH: ${EMOTION_MODEL_PATH:-app/models/vit_fer_fp16.tflite}
+      EMOTION_MODEL_VERSION: ${EMOTION_MODEL_VERSION:-vit-fer-7}
+      EMOTION_CONFIDENCE_THRESHOLD: ${EMOTION_CONFIDENCE_THRESHOLD:-0.6}
+      EMOTION_MARGIN_THRESHOLD: ${EMOTION_MARGIN_THRESHOLD:-0.10}
+      EMOTION_NORMALIZATION: ${EMOTION_NORMALIZATION:-mean_std_0.5}
+      # Use the ML models baked into the image (/app/model-cache) instead of
+      # re-downloading from HuggingFace at runtime. External LLM APIs
+      # (Gemini/OpenAI) still work - this only affects HF model loading.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
       interval: 15s
@@ -290,7 +305,7 @@ volumes:
     name: mindease-rabbitmq-data
   qdrant-data:
     name: mindease-qdrant-data
-  minio-data:
-    name: mindease-minio-data
+  s3mock-data:
+    name: mindease-s3mock-data
   keycloak-data:
     name: mindease-keycloak-data

@@ -10,6 +10,8 @@ import 'package:mindease/shared/widgets/app_button.dart';
 import 'package:mindease/features/onboarding/screening/data/questionnaires.dart';
 import 'package:mindease/features/onboarding/screening/screening_controller.dart';
 import 'package:mindease/features/onboarding/screening/screening_session.dart';
+import 'package:mindease/features/mood_tracking/domain/emotion/fer_preloader.dart';
+import 'package:mindease/features/onboarding/screening/steps/mood_assessment_step.dart';
 import 'package:mindease/features/onboarding/screening/steps/personal_info_step.dart';
 import 'package:mindease/features/onboarding/screening/steps/review_step.dart';
 import 'package:mindease/features/onboarding/screening/widgets/option_picker.dart';
@@ -30,12 +32,25 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
   bool _submitting = false;
   bool _loading = true;
   String? _catalogError;
+  // Duplicate-call prevention for the onboarding mood write: exactly one
+  // analyze + one record per submission attempt chain; retries reuse the id.
+  bool _moodPersistAttempted = false;
+
+  /// Stable idempotency key for the onboarding camera emotion event: one per
+  /// screening-screen instance, so a retried submit replays the same event
+  /// instead of duplicating it (the backend dedupes by key).
+  late final String _cameraEventKey =
+      'ob-cam-${DateTime.now().millisecondsSinceEpoch}';
 
   @override
   void initState() {
     super.initState();
     ScreeningSession.firstName ??= '';
     _controller.addListener(_onControllerChanged);
+    // Fire-and-forget: warm the emotion interpreter while the user answers
+    // the questionnaire, so the optional camera step opens ready. Never
+    // throws; the camera screen falls back to its own load path.
+    FerPreloader.warmup();
     _ensureCatalog();
   }
 
@@ -51,6 +66,7 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
     if (_controller.catalogLoaded) {
       setState(() => _loading = false);
       _ensureScreening();
+      _ensureMoodHistory();
       return;
     }
     setState(() {
@@ -64,6 +80,7 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
       if (!mounted) return;
       setState(() => _loading = false);
       _ensureScreening();
+      _ensureMoodHistory();
     } on Object {
       if (!mounted) return;
       setState(() {
@@ -71,6 +88,25 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
         _catalogError = 'We couldn’t load the assessment questions. '
             'Please check your connection and try again.';
       });
+    }
+  }
+
+  /// Prefetches the onboarding mood context once per run so the mood step can
+  /// show history instead of asking redundant questions. Best-effort: a
+  /// failure degrades to a manual mood step and never blocks onboarding.
+  Future<void> _ensureMoodHistory() async {
+    final h = _controller.moodHistory;
+    if (h.loaded || h.loading) return;
+    _controller.setMoodHistoryLoading();
+    try {
+      final summary = await featureApi.getOnboardingMoodSummary();
+      if (!mounted) return;
+      _controller.applyMoodHistory(summary);
+    } on Object {
+      if (!mounted) return;
+      _controller.setMoodHistoryError(
+        'Previous check-ins are unavailable.',
+      );
     }
   }
 
@@ -166,6 +202,8 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
     switch (c.area) {
       case ScreeningArea.personal:
         return PersonalInfoStep(controller: c);
+      case ScreeningArea.mood:
+        return MoodAssessmentStep(controller: c);
       case ScreeningArea.review:
         return ReviewStep(controller: c);
       case ScreeningArea.lifestyle:
@@ -192,6 +230,11 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
     _saveTimer?.cancel();
     setState(() => _submitting = true);
     try {
+      // Persist the onboarding mood as a canonical mood entry first so it
+      // joins the user's real history (single analyze + single record per
+      // submission chain; retries reuse the linked id — never duplicates).
+      await _persistOnboardingMood();
+      _saveTimer?.cancel();
       var id = ScreeningSession.screeningId;
       if (id == null) {
         final created = await mindeaseApi.createScreening();
@@ -233,6 +276,158 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
               'Please try again.'),
         ),
       );
+    }
+  }
+
+  /// Persists the onboarding mood snapshot as a real mood entry.
+  ///
+  /// The user's self-reported mood is always the primary signal. Supporting
+  /// signals (camera observation and/or reflection text) enrich it through the
+  /// existing single `/moods/analyze` fusion — low confidence, conflicts, or
+  /// unavailability degrade to MANUAL, never block, never invent. Exactly one
+  /// analyze, one record, and one emotion event per submission chain; retries
+  /// reuse the linked id. A mood-write failure never blocks the assessment:
+  /// the snapshot still travels inside the screening payload.
+  Future<void> _persistOnboardingMood() async {
+    final c = _controller;
+    if (!c.mood.isComplete) return;
+    if (_moodPersistAttempted && c.mood.linkedMoodEntryId != null) return;
+    _moodPersistAttempted = true;
+
+    final moodId = c.mood.currentMoodId!;
+    final emotion = c.mood.emotion;
+    final hasText = c.mood.reflection.trim().isNotEmpty;
+    final note = hasText ? c.mood.reflection.trim() : null;
+    final intensity =
+        c.mood.intensityTouched ? c.mood.intensity : null;
+    final camera = c.mood.cameraResult;
+    final hasCamera = camera != null && camera.emotion != 'unknown';
+
+    try {
+      // The fusion call is an *enrichment*, not a prerequisite. If the AI
+      // service is slow or unavailable the check-in is still recorded below,
+      // carrying the camera observation the user actually produced. Previously
+      // a timeout here skipped recordMood entirely and lost the whole entry.
+      Map<String, dynamic>? analysis;
+      if (hasText || hasCamera) {
+        try {
+          analysis = await featureApi.analyzeMood(
+            mood: moodId,
+            emotion: emotion,
+            note: note,
+            cameraObservation: hasCamera ? camera.toMap() : null,
+          );
+        } on Object {
+          analysis = null;
+        }
+      }
+
+      if (analysis != null) {
+        final sourcesUsed =
+            (analysis['sources_used'] as List?)?.cast<String>() ?? [];
+        final textAnalysis =
+            analysis['text_analysis'] as Map<String, dynamic>?;
+        final cameraAnalysis =
+            analysis['camera_analysis'] as Map<String, dynamic>?;
+        final confidence =
+            (analysis['confidence'] as num?)?.toDouble();
+        final observations = <Map<String, dynamic>>[];
+        if (textAnalysis != null) {
+          observations.add({
+            'source': textAnalysis['source'] ?? 'TEXT',
+            'emotion': textAnalysis['emotion'] ?? 'neutral',
+            'confidence': textAnalysis['emotion_confidence'] ?? 0.0,
+            'sentiment': textAnalysis['sentiment'],
+            'sentimentConfidence': textAnalysis['sentiment_confidence'],
+            'suggestedMood': textAnalysis['suggested_mood'],
+            'modelVersion': textAnalysis['model_version'],
+          });
+        }
+        if (cameraAnalysis != null) {
+          observations.add({
+            'source': cameraAnalysis['source'] ?? 'CAMERA',
+            'emotion': cameraAnalysis['emotion'] ?? 'neutral',
+            'confidence': cameraAnalysis['confidence'] ?? 0.0,
+            'suggestedMood': cameraAnalysis['suggested_mood'],
+            'modelVersion': cameraAnalysis['model_version'],
+          });
+        }
+        // Source mirrors the standalone check-in exactly: MULTIMODAL only
+        // when both signals participated, otherwise the single used source.
+        final String source;
+        if (sourcesUsed.contains('TEXT') &&
+            sourcesUsed.contains('CAMERA')) {
+          source = 'MULTIMODAL';
+        } else if (sourcesUsed.contains('CAMERA')) {
+          source = 'CAMERA';
+        } else if (sourcesUsed.contains('TEXT')) {
+          source = 'TEXT';
+        } else {
+          source = 'MANUAL';
+        }
+        final created = await featureApi.recordMood(
+          mood: moodId,
+          emotion: emotion,
+          note: note,
+          source: source,
+          confidence: confidence,
+          // The user's own selection is already the stored mood; fusing now
+          // echoes it back, so persist the AI's separate read instead.
+          aiSuggestedMood: analysis['ai_suggested_mood'] as String?,
+          aiObservations: observations.isEmpty ? null : observations,
+          intensity: intensity,
+        );
+        c.setLinkedMoodEntryId(created?['id'] as String?);
+      } else if (hasText || hasCamera) {
+        // Fusion unavailable: persist the check-in from what we know locally.
+        // No AI mood is invented — only the camera result the device itself
+        // produced is attached as an observation.
+        final created = await featureApi.recordMood(
+          mood: moodId,
+          emotion: emotion,
+          note: note,
+          source: hasCamera ? 'CAMERA' : 'TEXT',
+          aiObservations: hasCamera
+              ? [
+                  {
+                    'source': 'CAMERA',
+                    'emotion': camera.emotion,
+                    'confidence': camera.confidence,
+                    'suggestedMood': null,
+                    'modelVersion': camera.modelVersion,
+                  },
+                ]
+              : null,
+          intensity: intensity,
+        );
+        c.setLinkedMoodEntryId(created?['id'] as String?);
+      } else {
+        final created = await featureApi.recordMood(
+          mood: moodId,
+          emotion: emotion,
+          source: 'MANUAL',
+          intensity: intensity,
+        );
+        c.setLinkedMoodEntryId(created?['id'] as String?);
+      }
+      // Immutable camera telemetry, best-effort: one stable key per
+      // onboarding run so a retry replays instead of duplicating (the
+      // backend dedupes by key). Must never fail the mood write above.
+      if (hasCamera) {
+        try {
+          await featureApi.recordEmotionEvent(
+            camera.toEventMap(
+              capturedAt: DateTime.now().toUtc().toIso8601String(),
+              idempotencyKey: _cameraEventKey,
+            ),
+          );
+        } on Object {
+          // Telemetry only — the mood record is already persisted.
+        }
+      }
+    } on Object {
+      // Best-effort: the screening payload still carries the snapshot and the
+      // backend derives trend/history from whatever exists server-side.
     }
   }
 

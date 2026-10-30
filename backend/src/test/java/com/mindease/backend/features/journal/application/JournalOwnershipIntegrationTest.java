@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mindease.backend.common.error.ApiException;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.journal.domain.JournalEntry;
 import com.mindease.backend.features.journal.domain.JournalEntryRepository;
 import com.mindease.backend.features.journal.dto.CreateJournalRequest;
@@ -46,6 +47,9 @@ class JournalOwnershipIntegrationTest {
     @Mock
     private PersonalizationService personalizationService;
 
+    @Mock
+    private ChallengeActivityService challengeActivityService;
+
     private JournalService journalService;
 
     private static final String USER_A = "user-a-123";
@@ -55,7 +59,10 @@ class JournalOwnershipIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        journalService = new JournalService(repository, mediaService, aiClient, personalizationService);
+        // Ownership isolation is orthogonal to at-rest encryption, so this
+        // suite uses a disabled cipher to keep stored values inspectable.
+        journalService = new JournalService(repository, mediaService, aiClient,
+                personalizationService, challengeActivityService, new JournalCipher(""));
     }
 
     // ── Helpers ──
@@ -176,12 +183,14 @@ class JournalOwnershipIntegrationTest {
     void search_passesUserIdToRepository() {
         List<JournalEntry> searchResults = List.of(
                 buildEntry("s1", USER_A, "A Meditation", "Meditation content"));
-        when(repository.searchByUserIdAndText(eq(USER_A), any(), any())).thenReturn(searchResults);
+        // Search now scans the owner's newest entries because the body is
+        // encrypted at rest; the ownership guarantee is the scoped query.
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq(USER_A), any())).thenReturn(searchResults);
 
         var result = journalService.getJournalEntries(USER_A, 0, 50, null, "meditation");
 
         assertThat(result.entries()).hasSize(1);
-        verify(repository).searchByUserIdAndText(eq(USER_A), any(), any());
+        verify(repository).findByUserIdOrderByCreatedAtDesc(eq(USER_A), any());
     }
 
     // ── UPDATE: Cross-user protection ──

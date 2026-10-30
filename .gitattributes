@@ -1,0 +1,9 @@
+# Golden test fixtures are raw byte arrays, not text. Marking them binary keeps
+# Git from normalizing line endings or showing a megabyte-wide text diff.
+app/test/fer_vit_golden/*.raw binary
+
+*.tflite binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary

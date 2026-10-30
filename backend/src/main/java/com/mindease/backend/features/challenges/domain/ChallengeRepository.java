@@ -10,4 +10,10 @@ public interface ChallengeRepository extends MongoRepository<Challenge, String> 
     List<Challenge> findByActiveTrue();
 
     Optional<Challenge> findByIdAndActiveTrue(String id);
+
+    List<Challenge> findByActiveTrueAndFrequencyOrderByCreatedAtAsc(String frequency);
+
+    List<Challenge> findByActiveTrueAndFrequency(String frequency);
+
+    List<Challenge> findByActiveTrueAndType(String type);
 }

@@ -28,10 +28,14 @@ public class AiStaleJobSweeper {
     private static final Logger log = LoggerFactory.getLogger(AiStaleJobSweeper.class);
 
     private final AiAnalysisJobRepository jobs;
+    private final AiAnalysisJobService jobService;
     private final AppProperties props;
 
-    public AiStaleJobSweeper(AiAnalysisJobRepository jobs, AppProperties props) {
+    public AiStaleJobSweeper(AiAnalysisJobRepository jobs,
+                             AiAnalysisJobService jobService,
+                             AppProperties props) {
         this.jobs = jobs;
+        this.jobService = jobService;
         this.props = props;
     }
 
@@ -42,11 +46,11 @@ public class AiStaleJobSweeper {
                 AiJobStatus.PROCESSING, deadline));
         stale.addAll(jobs.findByStatusAndCreatedAtBefore(AiJobStatus.QUEUED, deadline));
         for (AiAnalysisJob job : stale) {
-            job.setStatus(AiJobStatus.FAILED);
-            job.setErrorMessage("Analysis timed out while being processed; please retry.");
-            job.setUpdatedAt(Instant.now());
-            jobs.save(job);
-            log.warn("ai_job_stale_failed jobId={}", job.getId());
+            // Route through the service so a swept job also publishes the
+            // deterministic fallback profile instead of stranding the user on
+            // an indefinite "AI pending" screen.
+            jobService.expire(job.getId(),
+                    "Analysis timed out while being processed; please retry.");
         }
         if (!stale.isEmpty()) {
             log.info("ai_stale_sweep_failed_count={}", stale.size());

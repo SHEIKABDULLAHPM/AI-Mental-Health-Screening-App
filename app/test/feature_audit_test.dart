@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:mindease/core/theme/app_theme.dart';
 import 'package:mindease/features/ai_coach/presentation/screens/ai_coach_home_screen.dart';
+import 'package:mindease/features/assessment_history/presentation/screens/assessment_history_screen.dart';
 import 'package:mindease/features/ai_coach/presentation/screens/chat_details_screen.dart';
 import 'package:mindease/features/ai_coach/presentation/screens/chat_screen.dart';
 import 'package:mindease/features/ai_coach/presentation/screens/conversation_history_screen.dart';
@@ -23,19 +24,29 @@ import 'package:mindease/features/mood_tracking/presentation/screens/mood_histor
 import 'package:mindease/features/mood_tracking/presentation/screens/mood_tracking_home_screen.dart';
 import 'package:mindease/features/mood_tracking/presentation/screens/mood_trends_screen.dart';
 import 'package:mindease/features/mood_tracking/presentation/screens/record_mood_screen.dart';
+import 'package:mindease/features/physical_wellness/presentation/screens/physical_wellness_screen.dart';
 import 'package:mindease/features/recommendations/presentation/screens/recommendation_details_screen.dart';
 import 'package:mindease/features/recommendations/presentation/screens/recommendations_home_screen.dart';
 import 'package:mindease/features/relax/presentation/screens/activity_player_screen.dart';
 import 'package:mindease/features/relax/presentation/screens/relax_home_screen.dart';
 
+import 'support/audit_providers.dart';
+
 Widget harness(String initial) {
   final router = GoRouter(
     initialLocation: initial,
     routes: [
+      GoRoute(
+        path: '/assessment-history',
+        builder: (c, s) => const AssessmentHistoryScreen(),
+      ),
       GoRoute(path: '/mood', builder: (c, s) => const MoodTrackingHomeScreen()),
-      GoRoute(path: '/mood-record', builder: (c, s) => const RecordMoodScreen()),
-      GoRoute(path: '/mood-history', builder: (c, s) => const MoodHistoryScreen()),
-      GoRoute(path: '/mood-trends', builder: (c, s) => const MoodTrendsScreen()),
+      GoRoute(
+          path: '/mood-record', builder: (c, s) => const RecordMoodScreen()),
+      GoRoute(
+          path: '/mood-history', builder: (c, s) => const MoodHistoryScreen()),
+      GoRoute(
+          path: '/mood-trends', builder: (c, s) => const MoodTrendsScreen()),
       GoRoute(path: '/journal', builder: (c, s) => const JournalHomeScreen()),
       GoRoute(
         path: '/journal-create',
@@ -65,7 +76,8 @@ Widget harness(String initial) {
       ),
       GoRoute(
         path: '/recommendations/r1',
-        builder: (c, s) => const RecommendationDetailsScreen(recommendationId: 'r1'),
+        builder: (c, s) =>
+            const RecommendationDetailsScreen(recommendationId: 'r1'),
       ),
       GoRoute(
         path: '/challenges',
@@ -75,7 +87,8 @@ Widget harness(String initial) {
         path: '/challenges/ch1',
         builder: (c, s) => const ChallengeDetailsScreen(challengeId: 'ch1'),
       ),
-      GoRoute(path: '/habits', builder: (c, s) => const HabitTrackerHomeScreen()),
+      GoRoute(
+          path: '/habits', builder: (c, s) => const HabitTrackerHomeScreen()),
       GoRoute(path: '/habits/add', builder: (c, s) => const AddHabitScreen()),
       GoRoute(
         path: '/habits/h1',
@@ -98,9 +111,15 @@ Widget harness(String initial) {
         path: '/letters/f1',
         builder: (c, s) => const FutureLetterDetailsScreen(letterId: 'f1'),
       ),
+      GoRoute(
+        path: '/physical-wellness',
+        builder: (c, s) => const PhysicalWellnessScreen(),
+      ),
     ],
   );
-  return MaterialApp.router(theme: AppTheme.light(), routerConfig: router);
+  return withAuditProviders(
+    MaterialApp.router(theme: AppTheme.light(), routerConfig: router),
+  );
 }
 
 final List<String> _capturedErrors = [];
@@ -122,7 +141,12 @@ void main() {
       const configs = [
         (name: 'standard', physical: Size(1080, 2400), dpr: 2.8125, scale: 1.0),
         (name: 'small', physical: Size(640, 1280), dpr: 2.0, scale: 1.0),
-        (name: 'largeText', physical: Size(1080, 2400), dpr: 2.8125, scale: 1.5),
+        (
+          name: 'largeText',
+          physical: Size(1080, 2400),
+          dpr: 2.8125,
+          scale: 1.5
+        ),
       ];
 
       const routeOrder = [
@@ -150,6 +174,8 @@ void main() {
         '/letters',
         '/letters/create',
         '/letters/f1',
+        '/physical-wellness',
+        '/assessment-history',
       ];
 
       for (final cfg in configs) {

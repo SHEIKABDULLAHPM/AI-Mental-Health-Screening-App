@@ -62,5 +62,13 @@ ai-service/*.egg-info/
 logs/
 tmp/
 
+# ---- Large model artifacts ----
+# The production FER weights are ~172 MB each and are not redistributed in
+# this public repository: the upstream license was never recorded (see
+# docs/fer-migration.md §7 and §8). Provision them locally at the paths below.
+# The checked-in manifest carries the SHA-256 to verify a provisioned copy.
+app/assets/models/vit_fer_fp16.tflite
+ai-service/app/models/vit_fer_fp16.tflite
+
 # ---- Docker ----
 docker-data/

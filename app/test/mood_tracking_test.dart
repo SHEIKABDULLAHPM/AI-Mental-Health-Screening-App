@@ -48,7 +48,7 @@ class StubMoodApi implements MoodApi {
   }
 
   @override
-  Future<void> recordMood({
+  Future<Map<String, dynamic>?> recordMood({
     required String mood,
     String? emotion,
     String? note,
@@ -59,8 +59,9 @@ class StubMoodApi implements MoodApi {
     int? intensity,
   }) async {
     if (_error != null) throw Exception(_error);
+    final id = 'new_${_entries.length}';
     _entries.add({
-      'id': 'new_${_entries.length}',
+      'id': id,
       'mood': mood,
       'emotion': emotion,
       'note': note,
@@ -68,6 +69,18 @@ class StubMoodApi implements MoodApi {
       'confidence': confidence,
       'recordedAt': DateTime.now().toIso8601String(),
     });
+    return {'id': id};
+  }
+
+  @override
+  Future<Map<String, dynamic>> getOnboardingMoodSummary() async {
+    if (_error != null) throw Exception(_error);
+    return {
+      'hasHistory': _entries.isNotEmpty,
+      'recent': _recent.take(5).toList(),
+      'trendDirection': 'unknown',
+      'trendDescription': 'Not enough mood records to determine a trend.',
+    };
   }
 
   @override
@@ -103,6 +116,13 @@ class StubMoodApi implements MoodApi {
       'confidence': 0.85,
       'needsConfirmation': false,
     };
+  }
+
+  @override
+  Future<Map<String, dynamic>> recordEmotionEvent(
+      Map<String, dynamic> event) async {
+    if (_error != null) throw Exception(_error);
+    return {'id': 'evt-test', ...event};
   }
 }
 
@@ -267,12 +287,12 @@ void main() {
       expect(unknown.id, 'okay');
     });
 
-    test('mood values range from 1 to 6', () {
+    test('mood values match backend scale 1 to 6', () {
       final values = kMoods.map((m) => m.value).toList();
-      expect(values, containsAll([1, 2, 4, 5, 6]));
+      expect(values, containsAll([1, 2, 3, 4, 5, 6]));
     });
 
-    test('isPositive is true for value >= 5', () {
+    test('isPositive is true for value >= 4', () {
       expect(moodById('very_happy').isPositive, isTrue);
       expect(moodById('happy').isPositive, isTrue);
       expect(moodById('calm').isPositive, isTrue);
@@ -372,6 +392,24 @@ void main() {
       controller.clearAnalysis();
       expect(controller.analysisResult, isNull);
       expect(controller.analysisError, isNull);
+    });
+
+    test('recordEmotionEvent returns id on success', () async {
+      final id = await controller.recordEmotionEvent({
+        'emotion': 'happiness',
+        'scores': {'happiness': 0.9},
+        'idempotencyKey': 'test-key-1',
+      });
+      expect(id, 'evt-test');
+    });
+
+    test('recordEmotionEvent returns null on error (never throws)', () async {
+      api.setError('ingestion down');
+      final id = await controller.recordEmotionEvent({
+        'emotion': 'happiness',
+        'idempotencyKey': 'test-key-2',
+      });
+      expect(id, isNull);
     });
 
     test('loadEntries filters today entries', () async {

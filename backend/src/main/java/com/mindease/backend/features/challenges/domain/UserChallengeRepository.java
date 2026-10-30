@@ -1,5 +1,6 @@
 package com.mindease.backend.features.challenges.domain;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -9,11 +10,25 @@ public interface UserChallengeRepository extends MongoRepository<UserChallenge, 
 
     List<UserChallenge> findByUserIdOrderByStartedAtDesc(String userId);
 
-    Optional<UserChallenge> findByUserIdAndChallengeId(String userId, String challengeId);
-
     Optional<UserChallenge> findByIdAndUserId(String id, String userId);
 
-    List<UserChallenge> findByUserIdAndCompletedFalseOrderByStartedAtDesc(String userId);
+    /**
+     * Locate the user's progress on a challenge for a specific period.
+     */
+    Optional<UserChallenge> findByUserIdAndChallengeIdAndPeriodStart(
+            String userId, String challengeId, String periodStart);
 
-    List<UserChallenge> findByUserIdAndCompletedTrueOrderByCompletedAtDesc(String userId);
+    /**
+     * Latest (any period) progress for a challenge. Used to detect an in-flight
+     * instance when the exact period is not yet known (e.g. during start).
+     */
+    Optional<UserChallenge> findTopByUserIdAndChallengeIdOrderByCreatedAtDesc(
+            String userId, String challengeId);
+
+    List<UserChallenge> findByUserIdAndStatusOrderByUpdatedAtDesc(String userId, String status);
+
+    List<UserChallenge> findByUserIdAndStatusInOrderByUpdatedAtDesc(
+            String userId, List<String> statuses);
+
+    boolean existsByUserIdAndChallengeIdAndPeriodStart(String userId, String challengeId, String periodStart);
 }

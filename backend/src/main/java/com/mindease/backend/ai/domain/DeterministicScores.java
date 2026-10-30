@@ -17,6 +17,47 @@ public class DeterministicScores {
     private String sleepQuality;
     private String primaryFocus;
 
+    // ── Onboarding mood context (all optional, validated structured input) ──
+    // User-reported mood stays the primary signal; trend/history are
+    // deterministic server-side derivations, never client calculations.
+
+    /** Self-reported onboarding mood id, if provided. */
+    private String onboardingMood;
+
+    /** Deterministic 1-6 mood value derived from onboardingMood. */
+    private Integer onboardingMoodScore;
+
+    /** Optional user-reported emotion tag from onboarding. */
+    private String onboardingMoodEmotion;
+
+    /** Optional user-reported intensity 1-10 from onboarding. */
+    private Integer onboardingMoodIntensity;
+
+    /** Deterministic trend direction from mood history (or "unknown"). */
+    private String moodTrendDirection;
+
+    /** Human-readable trend description (or insufficiency notice). */
+    private String moodTrendDescription;
+
+    /** Number of historical mood entries available at submit time. */
+    private Integer moodHistoryCount;
+
+    // ── Camera supporting signal (all optional; absent = skipped/unclear) ──
+    // Extracted server-side from the linked mood entry's CAMERA AI
+    // observation — never trusted from raw client fields.
+
+    /** Stable camera-detected canonical emotion (e.g. neutral, happy). */
+    private String cameraEmotion;
+
+    /** Camera confidence 0-1 from the fusion result. */
+    private Double cameraConfidence;
+
+    /** Model version that produced the camera signal. */
+    private String cameraModelVersion;
+
+    /** Deterministic verdict: agree|close|differs|noSignal. */
+    private String signalAgreement;
+
     public DeterministicScores() {
     }
 
@@ -90,5 +131,93 @@ public class DeterministicScores {
 
     public void setPrimaryFocus(String primaryFocus) {
         this.primaryFocus = primaryFocus;
+    }
+
+    public String getOnboardingMood() {
+        return onboardingMood;
+    }
+
+    public void setOnboardingMood(String onboardingMood) {
+        this.onboardingMood = onboardingMood;
+    }
+
+    public Integer getOnboardingMoodScore() {
+        return onboardingMoodScore;
+    }
+
+    public void setOnboardingMoodScore(Integer onboardingMoodScore) {
+        this.onboardingMoodScore = onboardingMoodScore;
+    }
+
+    public String getOnboardingMoodEmotion() {
+        return onboardingMoodEmotion;
+    }
+
+    public void setOnboardingMoodEmotion(String onboardingMoodEmotion) {
+        this.onboardingMoodEmotion = onboardingMoodEmotion;
+    }
+
+    public Integer getOnboardingMoodIntensity() {
+        return onboardingMoodIntensity;
+    }
+
+    public void setOnboardingMoodIntensity(Integer onboardingMoodIntensity) {
+        this.onboardingMoodIntensity = onboardingMoodIntensity;
+    }
+
+    public String getMoodTrendDirection() {
+        return moodTrendDirection;
+    }
+
+    public void setMoodTrendDirection(String moodTrendDirection) {
+        this.moodTrendDirection = moodTrendDirection;
+    }
+
+    public String getMoodTrendDescription() {
+        return moodTrendDescription;
+    }
+
+    public void setMoodTrendDescription(String moodTrendDescription) {
+        this.moodTrendDescription = moodTrendDescription;
+    }
+
+    public Integer getMoodHistoryCount() {
+        return moodHistoryCount;
+    }
+
+    public void setMoodHistoryCount(Integer moodHistoryCount) {
+        this.moodHistoryCount = moodHistoryCount;
+    }
+
+    public String getCameraEmotion() {
+        return cameraEmotion;
+    }
+
+    public void setCameraEmotion(String cameraEmotion) {
+        this.cameraEmotion = cameraEmotion;
+    }
+
+    public Double getCameraConfidence() {
+        return cameraConfidence;
+    }
+
+    public void setCameraConfidence(Double cameraConfidence) {
+        this.cameraConfidence = cameraConfidence;
+    }
+
+    public String getCameraModelVersion() {
+        return cameraModelVersion;
+    }
+
+    public void setCameraModelVersion(String cameraModelVersion) {
+        this.cameraModelVersion = cameraModelVersion;
+    }
+
+    public String getSignalAgreement() {
+        return signalAgreement;
+    }
+
+    public void setSignalAgreement(String signalAgreement) {
+        this.signalAgreement = signalAgreement;
     }
 }

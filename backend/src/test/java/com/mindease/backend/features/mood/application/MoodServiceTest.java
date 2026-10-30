@@ -24,6 +24,7 @@ import org.springframework.data.domain.Pageable;
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
 import com.mindease.backend.common.logging.AuditLog;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.mood.domain.MoodEntry;
 import com.mindease.backend.features.mood.domain.MoodEntryRepository;
 import com.mindease.backend.personalization.application.PersonalizationService;
@@ -62,6 +63,9 @@ class MoodServiceTest {
     @Mock
     private PersonalizationService personalizationService;
 
+    @Mock
+    private ChallengeActivityService challengeActivityService;
+
     private MoodService service;
 
     private static final String USER_ID = "user-1";
@@ -71,7 +75,11 @@ class MoodServiceTest {
     @BeforeEach
     void setUp() {
         service = new MoodService(repository, audit, aiClient,
-                trendAnalyzer, guidanceEngine, safetyDetector, reflectionPrompts, personalizationService);
+                trendAnalyzer, guidanceEngine, safetyDetector, reflectionPrompts,
+                personalizationService, challengeActivityService,
+                // Direct executor: side effects run inline so existing
+                // assertions keep their exact synchronous semantics.
+                Runnable::run);
     }
 
     // --------------------------------------------------------------- createMood
@@ -116,6 +124,34 @@ class MoodServiceTest {
     }
 
     @Test
+    void createMoodRejectsFutureRecordedAtBeyondClockSkew() {
+        CreateMoodRequest request = new CreateMoodRequest("calm", "peace", null,
+                Instant.now().plus(2, ChronoUnit.HOURS), "MANUAL", null, null, null, null);
+
+        assertThatThrownBy(() -> service.createMood(USER_ID, request))
+                .isInstanceOf(ApiException.class)
+                .extracting(e -> ((ApiException) e).getCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void createMoodAcceptsSmallClockSkew() {
+        Instant recordedAt = Instant.now().plus(2, ChronoUnit.MINUTES);
+        CreateMoodRequest request = new CreateMoodRequest("calm", "peace", null,
+                recordedAt, "MANUAL", null, null, null, null);
+        when(repository.save(any())).thenAnswer(inv -> {
+            MoodEntry entry = inv.getArgument(0);
+            entry.setId(MOOD_ID);
+            return entry;
+        });
+
+        MoodResponse response = service.createMood(USER_ID, request);
+
+        assertThat(response.recordedAt()).isEqualTo(recordedAt);
+    }
+
+    @Test
     void createMoodWithAiObservations() {
         CreateMoodRequest request = new CreateMoodRequest("happy", "joy", "Good",
                 null, "MULTIMODAL",
@@ -136,6 +172,30 @@ class MoodServiceTest {
         assertThat(response.aiObservations()).hasSize(1);
         assertThat(response.aiObservations().get(0).emotion()).isEqualTo("joy");
         assertThat(response.analysisStatus()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void aiSuggestionIsStoredSeparatelyFromTheUsersOwnMood() {
+        // Fusion keeps the user's manual selection authoritative, so the mood is
+        // "calm" while the AI independently read "okay". The AI signal must
+        // survive as its own field instead of being overwritten by, or
+        // collapsed into, the user's choice.
+        CreateMoodRequest request = new CreateMoodRequest("calm", "grateful", "Rough day",
+                null, "MULTIMODAL",
+                List.of(new CreateMoodRequest.AiObservationInput(
+                        "TEXT", "anxiety", 0.8, "negative", 0.7, "stressed", "v1.0")),
+                0.84, "okay", null);
+        when(repository.save(any())).thenAnswer(inv -> {
+            MoodEntry entry = inv.getArgument(0);
+            entry.setId(MOOD_ID);
+            return entry;
+        });
+
+        MoodResponse response = service.createMood(USER_ID, request);
+
+        assertThat(response.mood()).isEqualTo("calm");
+        assertThat(response.aiSuggestedMood()).isEqualTo("okay");
+        assertThat(response.aiSuggestedMood()).isNotEqualTo(response.mood());
     }
 
     @Test
@@ -181,14 +241,14 @@ class MoodServiceTest {
     void analyzeMoodDelegatesToAiClient() {
         AnalyzeMoodRequest request = new AnalyzeMoodRequest("happy", "joy", "Great", null);
         AnalyzeMoodResponse expected = new AnalyzeMoodResponse(
-                "happy", "joy", 0.9, List.of("TEXT", "MANUAL"),
+                "happy", null, "joy", 0.9, List.of("TEXT", "MANUAL"),
                 "happy",
                 new AnalyzeMoodResponse.TextAnalysisResult(
                         "TEXT", "joy", 0.9, "positive", 0.85, "happy", "v1.0"),
                 null, false, "v1.0",
                 null, null, null, null);
         when(aiClient.analyzeMood(request)).thenReturn(expected);
-        when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(any(), any()))
+        when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(any(), any(), any(org.springframework.data.domain.Pageable.class)))
                 .thenReturn(List.of());
         when(trendAnalyzer.analyzeTrend(any())).thenReturn(
                 Map.of("direction", "unknown", "description", "Not enough data", "dataPoints", 0));
@@ -211,11 +271,11 @@ class MoodServiceTest {
         AnalyzeMoodRequest request = new AnalyzeMoodRequest("happy", "joy", "Great", null);
         // MoodAiClient handles AI failures internally and returns a manual-only fallback
         AnalyzeMoodResponse fallback = new AnalyzeMoodResponse(
-                "happy", "neutral", 0.0, List.of("MANUAL"), "happy",
+                "happy", null, "neutral", 0.0, List.of("MANUAL"), "happy",
                 null, null, false, "unavailable",
                 null, null, null, null);
         when(aiClient.analyzeMood(request)).thenReturn(fallback);
-        when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(any(), any()))
+        when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(any(), any(), any(org.springframework.data.domain.Pageable.class)))
                 .thenReturn(List.of());
         when(trendAnalyzer.analyzeTrend(any())).thenReturn(
                 Map.of("direction", "unknown", "description", "Not enough data", "dataPoints", 0));
@@ -333,7 +393,7 @@ class MoodServiceTest {
     @Test
     void statisticsReturnsEmptyStatsWhenNoEntries() {
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of());
 
         MoodStatisticsResponse stats = service.getMoodStatistics(USER_ID);
@@ -360,7 +420,7 @@ class MoodServiceTest {
         twoDaysAgo.setIntensity(7);
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(today, yesterday, twoDaysAgo));
 
         MoodStatisticsResponse stats = service.getMoodStatistics(USER_ID);
@@ -385,7 +445,7 @@ class MoodServiceTest {
         oldEntry.setRecordedAt(now.minus(30, ChronoUnit.DAYS));
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(thisWeek, oldEntry));
 
         MoodStatisticsResponse stats = service.getMoodStatistics(USER_ID);
@@ -477,7 +537,7 @@ class MoodServiceTest {
         sad.setRecordedAt(Instant.now().minus(1, ChronoUnit.DAYS));
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(happy1, happy2, sad));
 
         List<MoodTrendResponse> trends = service.getMoodTrends(USER_ID, 7);
@@ -496,7 +556,7 @@ class MoodServiceTest {
         recent.setRecordedAt(Instant.now().minus(1, ChronoUnit.DAYS));
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(recent));
 
         List<MoodTrendResponse> trends = service.getMoodTrends(USER_ID, 7);
@@ -509,7 +569,7 @@ class MoodServiceTest {
     @Test
     void getMoodTrendsReturnsEmptyWhenNoEntries() {
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of());
 
         List<MoodTrendResponse> trends = service.getMoodTrends(USER_ID, 7);
@@ -523,7 +583,7 @@ class MoodServiceTest {
         single.setRecordedAt(Instant.now().minus(1, ChronoUnit.DAYS));
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(single));
 
         List<MoodTrendResponse> trends = service.getMoodTrends(USER_ID, 7);
@@ -542,7 +602,7 @@ class MoodServiceTest {
         single.setRecordedAt(Instant.now().minus(1, ChronoUnit.DAYS));
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(single));
 
         Map<String, Object> result = service.getEnhancedTrends(USER_ID, 30);
@@ -563,7 +623,7 @@ class MoodServiceTest {
         e3.setRecordedAt(Instant.now().minus(3, ChronoUnit.DAYS));
 
         when(repository.findByUserIdAndRecordedAtAfterOrderByRecordedAtDesc(
-                eq(USER_ID), any(Instant.class)))
+                eq(USER_ID), any(Instant.class), any(Pageable.class)))
                 .thenReturn(List.of(e1, e2, e3));
 
         Map<String, Object> result = service.getEnhancedTrends(USER_ID, 30);

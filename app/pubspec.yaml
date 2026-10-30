@@ -36,6 +36,7 @@ dependencies:
   path: ^1.9.1
   # Utilities
   intl: ^0.19.0
+  crypto: ^3.0.7 # model checksum verification (vit-fer-7 manifest)
   equatable: ^2.0.5
   shared_preferences: ^2.5.5
   flutter_svg: ^2.3.0
@@ -44,13 +45,16 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  integration_test:
+    sdk: flutter
 
 flutter:
   uses-material-design: true
 
   assets:
     - assets/logo/
-    - assets/models/emotion_model.tflite
+    - assets/models/vit_fer_manifest.json
+    - assets/models/vit_fer_fp16.tflite
 
   fonts:
     - family: Inter

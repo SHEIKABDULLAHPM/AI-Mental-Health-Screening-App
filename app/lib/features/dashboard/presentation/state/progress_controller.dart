@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:mindease/core/api/feature_api.dart';
@@ -13,6 +15,7 @@ class ProgressController extends ChangeNotifier {
 
   Map<String, dynamic>? _progress;
   bool _loading = false;
+  bool _disposed = false;
   String? _error;
 
   bool get loading => _loading;
@@ -137,7 +140,26 @@ class ProgressController extends ChangeNotifier {
   void _start() {
     _loading = true;
     _error = null;
-    notifyListeners();
+    _deferNotify();
+  }
+
+  /// Listeners must not be notified synchronously from a loader a screen
+  /// calls out of `initState`: the provider scope sits above the router, and
+  /// marking it while the framework is still building that screen trips its
+  /// "setState() or markNeedsBuild() called during build" assertion. State is
+  /// already assigned synchronously, so the in-flight build reads the right
+  /// values; this only schedules the follow-up rebuild safely.
+  void _deferNotify() {
+    if (_disposed) return;
+    scheduleMicrotask(() {
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   void _fail(Object e) {

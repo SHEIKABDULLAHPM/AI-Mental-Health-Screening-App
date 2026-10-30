@@ -29,6 +29,18 @@ class MindeaseApi {
     return data;
   }
 
+  /// Unwraps list payloads (for endpoints whose `data` is a JSON array).
+  List<Map<String, dynamic>> _unwrapList(Map<String, dynamic>? body) {
+    final payload = body?['data'];
+    if (payload is! List) {
+      throw const ServerFailure('The server returned an invalid response.');
+    }
+    return [
+      for (final item in payload)
+        if (item is Map<String, dynamic>) item,
+    ];
+  }
+
   Future<T> _guard<T>(Future<T> Function() run) async {
     try {
       return await run();
@@ -214,12 +226,25 @@ class MindeaseApi {
     });
   }
 
+  /// The authenticated user's assessment history, newest first.
+  ///
+  /// Returns only stored metadata; scores are never recomputed client-side.
+  Future<List<MindeaseAssessmentSummary>> assessmentHistory() {
+    return _guard(() async {
+      final body = await _client.get<Map<String, dynamic>>('/screenings/me');
+      return [
+        for (final item in _unwrapList(body.data))
+          MindeaseAssessmentSummary.fromJson(item),
+      ];
+    });
+  }
+
   /// Current AI analysis job status. Returns an empty map when the job is
   /// unknown to the caller, so a stale/missing id degrades to "keep polling".
   Future<Map<String, dynamic>> aiAnalysisStatus(String jobId) async {
     try {
-      final body = await _client
-          .get<Map<String, dynamic>>('/ai-analysis/$jobId/status');
+      final body =
+          await _client.get<Map<String, dynamic>>('/ai-analysis/$jobId/status');
       return _unwrapBody(body.data);
     } on Failure {
       return <String, dynamic>{};
@@ -231,8 +256,8 @@ class MindeaseApi {
   /// Re-queues a failed AI analysis job for another attempt.
   Future<Map<String, dynamic>> retryAiAnalysis(String jobId) {
     return _guard(() async {
-      final body = await _client
-          .post<Map<String, dynamic>>('/ai-analysis/$jobId/retry');
+      final body =
+          await _client.post<Map<String, dynamic>>('/ai-analysis/$jobId/retry');
       return _unwrapBody(body.data);
     });
   }
@@ -247,10 +272,12 @@ class MindeaseApi {
       final inner = (body.data as Map<String, dynamic>)['data'];
       if (inner is! Map) return null;
       return MindeaseProfile.fromJson(inner as Map<String, dynamic>);
-    } on Failure {
-      return null;
-    } catch (_) {
-      return null;
+    } on Failure catch (e) {
+      // Only "no profile yet" degrades to pending. Real failures (server
+      // errors, network loss, auth) propagate to the screen's error card
+      // and retry instead of masquerading as "pending" with Continue enabled.
+      if (e.code == 'HTTP_404') return null;
+      rethrow;
     }
   }
 
@@ -258,6 +285,16 @@ class MindeaseApi {
     return _guard(() async {
       final body = await _client.get<Map<String, dynamic>>('/dashboard');
       return MindeaseDashboard.fromJson(_unwrapBody(body.data));
+    });
+  }
+
+  /// Combined mental + physical insight. A normal pre-onboarding state returns
+  /// `available: false` (HTTP 200), so callers can simply hide the card.
+  Future<MindeaseCombinedInsight> combinedInsight() {
+    return _guard(() async {
+      final body =
+          await _client.get<Map<String, dynamic>>('/wellness/combined-insight');
+      return MindeaseCombinedInsight.fromJson(_unwrapBody(body.data));
     });
   }
 }

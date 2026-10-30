@@ -29,8 +29,8 @@ services:
 
   minio:
     ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
+      # S3Mock HTTP (S3 API). No console port (S3Mock has no UI).
+      - "127.0.0.1:9090:9090"
 
   # ------------------------------------------------------------- Mailcatcher
   # Dev-only SMTP inbox so the forgot-password flow can be verified without a

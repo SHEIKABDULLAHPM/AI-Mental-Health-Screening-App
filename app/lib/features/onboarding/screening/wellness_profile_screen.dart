@@ -1,15 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 
 import 'package:mindease/core/api/models.dart';
+import 'package:mindease/core/constants/moods.dart';
 import 'package:mindease/core/di/app_services.dart';
 import 'package:mindease/core/error/failures.dart';
+import 'package:mindease/features/mood_tracking/domain/emotion/fer_result.dart';
 import 'package:mindease/core/theme/app_colors.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
+import 'package:mindease/features/physical_wellness/presentation/state/lifestyle_wellness_controller.dart';
+import 'package:mindease/features/recommendations/presentation/state/recommendation_controller.dart';
 import 'package:mindease/shared/widgets/app_backdrop.dart';
 import 'package:mindease/shared/widgets/app_button.dart';
 import 'package:mindease/shared/widgets/app_section_card.dart';
+import 'package:mindease/shared/widgets/safety_support_card.dart';
 import 'package:mindease/shared/widgets/ring_painter.dart';
+import 'package:mindease/shared/widgets/wellness_analysis_result_card.dart';
 import 'package:mindease/features/onboarding/screening/screening_session.dart';
 
 /// AI-generated initial wellness summary presented after screening. The
@@ -74,6 +81,43 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
     context.go('/screening');
   }
 
+
+
+  Future<void> _analyzeMentalWellness() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final result = await wellnessAnalysisApi.analyzeMentalWellness();
+      if (!mounted) return;
+      await showWellnessAnalysisSheet(
+        context,
+        WellnessAnalysisResult.mental(result),
+      );
+      if (mounted) {
+        try {
+          context.read<RecommendationController>().loadRecommendations();
+          context.read<LifestyleWellnessController>().refreshAll();
+        } catch (_) {}
+      }
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Could not run the mental wellness analysis. Check your connection and try again.',
+          ),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: _analyzeMentalWellness,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -114,12 +158,20 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
                         )
                       else if (_error != null)
                         _ErrorCard(message: _error!, onRetry: _load)
-                      else if (_profile == null || _profile!.isPending)
+                      else if (_profile == null || !_profile!.hasScores)
+                        // Nothing to show until the deterministic scores land.
+                        // The LLM insight arriving later never gates them.
                         _PendingCard()
                       else ...[
+                        if (_profile!.safetyFlag) ...[
+                          const SafetySupportCard(),
+                          const SizedBox(height: AppSpacing.lg),
+                        ],
                         Center(
                           child: _ScoreRing(_profile!.wellnessScore ?? 0),
                         ),
+                        const SizedBox(height: AppSpacing.lg),
+                        _MoodProgressCard(profile: _profile!),
                         const SizedBox(height: AppSpacing.lg),
                         _MetricGrid(profile: _profile!),
                         const SizedBox(height: AppSpacing.lg),
@@ -138,14 +190,28 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              _profile!.aiInsight ?? '',
+                              _profile!.hasInsight
+                                  ? _profile!.aiInsight!
+                                  : 'Your personalised insight is still being '
+                                      'written. Everything above is already '
+                                      'final and will not change.',
                               style: theme.textTheme.bodyMedium?.copyWith(
                                 color: theme.colorScheme.onSurfaceVariant,
                                 height: 1.6,
+                                fontStyle: _profile!.hasInsight
+                                    ? FontStyle.normal
+                                    : FontStyle.italic,
                               ),
                             ),
                           ],
                         ),
+                        const SizedBox(height: AppSpacing.lg),
+                        _WellnessAnalysisActions(
+                          onAnalyzeMental: _analyzeMentalWellness,
+                          loading: _busy,
+                        ),
+                        const SizedBox(height: AppSpacing.lg),
+                        _NextStepCard(profile: _profile!),
                       ],
                     ],
                   ),
@@ -167,7 +233,8 @@ class _WellnessProfileScreenState extends State<WellnessProfileScreen> {
                         label: 'Continue',
                         icon: Icons.arrow_forward_rounded,
                         loading: _busy,
-                        onPressed: _loading || _error != null ? null : _continue,
+                        onPressed:
+                            _loading || _error != null ? null : _continue,
                       ),
                       const SizedBox(height: AppSpacing.sm),
                       AppButton(
@@ -195,11 +262,250 @@ String _focusLabel(String? focus) => switch (focus) {
       _ => 'Maintain Balance',
     };
 
+/// Integrated Mood Check-In summary for the final assessment.
+/// Shows the authoritative backend mood state; degrades to an honest
+/// "unavailable" state for older profiles instead of inventing values.
+class _MoodProgressCard extends StatelessWidget {
+  const _MoodProgressCard({required this.profile});
+
+  final MindeaseProfile profile;
+
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (!profile.hasMood) {
+      return AppSectionCard(
+        icon: Icons.mood_outlined,
+        iconColor: theme.colorScheme.tertiary,
+        title: 'Mood Progress',
+        subtitle: 'No onboarding mood recorded',
+        children: [
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Log a mood check-in to start tracking your mood pattern over time.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              height: 1.6,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          AppButton(
+            label: 'Log a Check-In',
+            icon: Icons.mood_rounded,
+            onPressed: () => context.push('/mood-record'),
+          ),
+        ],
+      );
+    }
+    final mood = moodById(profile.moodMood!);
+    final trend = profile.moodTrendDirection ?? 'unknown';
+    final (trendLabel, trendIcon, trendColor) = switch (trend) {
+      'improving' => (
+          'Improving',
+          Icons.trending_up_rounded,
+          AppColors.success
+        ),
+      'declining' => (
+          'Needs attention',
+          Icons.trending_down_rounded,
+          AppColors.error
+        ),
+      'stable' => (
+          'Stable',
+          Icons.remove_rounded,
+          theme.colorScheme.onSurfaceVariant
+        ),
+      'fluctuating' => ('Varying', Icons.swap_vert_rounded, AppColors.warning),
+      _ => (
+          'Unknown',
+          Icons.help_outline_rounded,
+          theme.colorScheme.onSurfaceVariant
+        ),
+    };
+    final cameraLine = cameraSignalLine(
+      profile.cameraEmotion,
+      profile.signalAgreement,
+      ferDisplayName,
+    );
+    return AppSectionCard(
+      icon: Icons.mood_rounded,
+      iconColor: theme.colorScheme.tertiary,
+      title: 'Mood Progress',
+      subtitle: profile.moodTrendDescription?.isNotEmpty == true
+          ? profile.moodTrendDescription
+          : null,
+      children: [
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: mood.color.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(mood.icon, color: mood.color, size: 28),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    mood.label,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (profile.moodEmotion?.isNotEmpty == true)
+                    Text(
+                      profile.moodEmotion!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: trendColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(trendIcon, size: 14, color: trendColor),
+                  const SizedBox(width: 4),
+                  Text(
+                    trendLabel,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: trendColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if ((profile.moodHistoryCount ?? 0) > 0) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Based on ${profile.moodHistoryCount} recent check-in${profile.moodHistoryCount == 1 ? '' : 's'} alongside this assessment.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+        if (cameraLine != null) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            cameraLine,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              height: 1.5,
+            ),
+          ),
+        ],
+        const SizedBox(height: AppSpacing.md),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => context.push('/mood-trends'),
+            icon: const Icon(Icons.show_chart_rounded, size: 18),
+            label: const Text('View mood trends'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Deterministic next-step recommendation derived from real assessment data
+/// (trend + focus). No AI call — the personalized narrative lives in the
+/// insight card above.
+class _NextStepCard extends StatelessWidget {
+  const _NextStepCard({required this.profile});
+
+  final MindeaseProfile profile;
+
+  (String, String, IconData, String) _nextStep() {
+    if (profile.moodTrendDirection == 'declining') {
+      return (
+        'Keep a gentle daily check-in',
+        'Your recent pattern dips a little. A short daily check-in helps you notice what lifts your mood.',
+        Icons.mood_rounded,
+        '/mood-record',
+      );
+    }
+    return switch (profile.primaryFocus) {
+      'SLEEP' => (
+          'Wind down for better rest',
+          'A consistent bedtime is your highest-impact step. Try a short relaxation exercise tonight.',
+          Icons.bedtime_rounded,
+          '/relax',
+        ),
+      'STRESS_MANAGEMENT' => (
+          'Take a two-minute breather',
+          'When things feel heavy, a short breathing exercise can help you reset.',
+          Icons.self_improvement_rounded,
+          '/relax',
+        ),
+      'MOOD_SUPPORT' => (
+          'Keep your check-in streak going',
+          'Small daily wins add up. Log your mood tomorrow to keep the picture clear.',
+          Icons.mood_rounded,
+          '/mood-record',
+        ),
+      _ => (
+          'Explore your recommendations',
+          'Your profile is ready — see what\u2019s picked for you this week.',
+          Icons.lightbulb_outline_rounded,
+          '/recommendations',
+        ),
+    };
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (title, body, icon, route) = _nextStep();
+    return AppSectionCard(
+      icon: Icons.rocket_launch_rounded,
+      iconColor: theme.colorScheme.primary,
+      title: 'Recommended next step',
+      subtitle: title,
+      children: [
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          body,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            height: 1.6,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        AppButton(
+          label: 'Continue',
+          icon: icon,
+          onPressed: () => context.push(route),
+        ),
+      ],
+    );
+  }
+}
+
 class _ErrorCard extends StatelessWidget {
   const _ErrorCard({required this.message, required this.onRetry});
 
   final String message;
   final VoidCallback onRetry;
+
 
   @override
   Widget build(BuildContext context) {
@@ -229,9 +535,12 @@ class _ErrorCard extends StatelessWidget {
 }
 
 class _PendingCard extends StatelessWidget {
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final sessionMood = ScreeningSession.controller.mood;
+    final hasLocalMood = sessionMood.isComplete;
     return AppSectionCard(
       icon: Icons.hourglass_top_rounded,
       iconColor: AppColors.tertiary,
@@ -247,6 +556,28 @@ class _PendingCard extends StatelessWidget {
             height: 1.6,
           ),
         ),
+        if (hasLocalMood) ...[
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            children: [
+              Icon(
+                moodById(sessionMood.currentMoodId!).icon,
+                color: moodById(sessionMood.currentMoodId!).color,
+                size: 22,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Mood recorded: ${moodById(sessionMood.currentMoodId!).label}'
+                  '${sessionMood.emotion?.isNotEmpty == true ? ' · ${sessionMood.emotion}' : ''}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -256,6 +587,7 @@ class _ScoreRing extends StatelessWidget {
   const _ScoreRing(this.score);
 
   final int score;
+
 
   @override
   Widget build(BuildContext context) {
@@ -317,6 +649,7 @@ class _MetricGrid extends StatelessWidget {
   const _MetricGrid({required this.profile});
 
   final MindeaseProfile profile;
+
 
   @override
   Widget build(BuildContext context) {
@@ -411,6 +744,7 @@ class _Metric extends StatelessWidget {
   final String value;
   final Color color;
 
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -439,3 +773,58 @@ class _Metric extends StatelessWidget {
 }
 
 // ignore_for_file: unused_element
+
+
+
+class _WellnessAnalysisActions extends StatelessWidget {
+  const _WellnessAnalysisActions({required this.onAnalyzeMental, this.loading = false});
+
+  final VoidCallback onAnalyzeMental;
+  final bool loading;
+
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppSectionCard(
+      icon: Icons.psychology_outlined,
+      iconColor: theme.colorScheme.primary,
+      title: 'Mental Wellness',
+      subtitle: 'Analyze your mental wellbeing',
+      children: [
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Get a real-time mental wellness analysis using your latest assessment and mood data.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            height: 1.5,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: loading ? null : onAnalyzeMental,
+            icon: loading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.auto_awesome_rounded, size: 18),
+            label: Text(loading ? 'Analyzing…' : 'Analyze Mental Wellness'),
+          ),
+        ),
+        if (loading) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Analyzing your latest screening and mood data — this can take a few seconds.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}

@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.relax.domain.RelaxActivity;
 import com.mindease.backend.features.relax.domain.RelaxActivityRepository;
 import com.mindease.backend.features.relax.domain.UserRelaxCompletion;
@@ -37,6 +38,9 @@ class RelaxServiceTest {
     @Mock
     private UserRelaxCompletionRepository completionRepository;
 
+    @Mock
+    private ChallengeActivityService challengeActivityService;
+
     private RelaxService service;
 
     private static final String USER_ID = "user-1";
@@ -44,7 +48,7 @@ class RelaxServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new RelaxService(activityRepository, completionRepository);
+        service = new RelaxService(activityRepository, completionRepository, challengeActivityService);
     }
 
     // --------------------------------------------------------- getActivities

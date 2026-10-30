@@ -1,8 +1,93 @@
 import 'package:flutter/foundation.dart';
 
 import 'data/questionnaires.dart';
+import 'package:mindease/features/mood_tracking/presentation/screens/camera_mood_screen.dart';
 
-enum ScreeningArea { personal, lifestyle, phq, gad, pss, who, review }
+enum ScreeningArea { personal, mood, lifestyle, phq, gad, pss, who, review }
+
+/// Onboarding mood frequency options (user-reported consistency).
+const List<String> kMoodFrequencies = [
+  'Rarely',
+  'Sometimes',
+  'Often',
+  'Almost daily',
+];
+
+/// Recent emotional change options.
+const List<String> kMoodRecentChanges = [
+  'Better',
+  'About the same',
+  'Worse',
+  'Mixed',
+];
+
+/// Reusable onboarding mood assessment state. The self-reported current mood
+/// is the primary signal; everything else is supporting context. Validated
+/// instruments (PHQ/GAD/PSS/WHO) are untouched by this section.
+class MoodAssessmentData {
+  String? currentMoodId;
+  String? emotion;
+  int intensity = 5;
+  bool intensityTouched = false;
+  String? frequency;
+  String? recentChange;
+  String reflection = '';
+  String? context;
+
+  /// Canonical mood_entries id created for this onboarding check-in, if any.
+  String? linkedMoodEntryId;
+
+  /// Stable camera result attached from the existing `/mood-camera` screen.
+  /// Null when the user skips camera, denies permission, or backs out —
+  /// the flow always continues with the self-reported mood.
+  CameraMoodResult? cameraResult;
+
+  bool get isComplete =>
+      currentMoodId != null && currentMoodId!.isNotEmpty;
+
+  /// Whether a usable camera supporting signal is attached.
+  bool get hasCameraSignal =>
+      cameraResult != null && cameraResult!.emotion != 'unknown';
+
+  void clear() {
+    currentMoodId = null;
+    emotion = null;
+    intensity = 5;
+    intensityTouched = false;
+    frequency = null;
+    recentChange = null;
+    reflection = '';
+    context = null;
+    linkedMoodEntryId = null;
+    cameraResult = null;
+  }
+}
+
+/// Mood history context loaded once per run for prefill (never recalculated
+/// on the client — trend direction always comes from the backend).
+class MoodHistoryContext {
+  bool loaded = false;
+  bool loading = false;
+  String? error;
+  bool hasHistory = false;
+  List<Map<String, dynamic>> recent = const [];
+  String trendDirection = 'unknown';
+  String trendDescription = '';
+  int totalEntries = 0;
+  String? mostCommonMood;
+
+  void clear() {
+    loaded = false;
+    loading = false;
+    error = null;
+    hasHistory = false;
+    recent = const [];
+    trendDirection = 'unknown';
+    trendDescription = '';
+    totalEntries = 0;
+    mostCommonMood = null;
+  }
+}
 
 class PersonalInfoData {
   String age = '';
@@ -19,6 +104,8 @@ class PersonalInfoData {
 /// from the backend catalog ([loadCatalog]) — nothing is hardcoded here.
 class ScreeningController extends ChangeNotifier {
   final PersonalInfoData personal = PersonalInfoData();
+  final MoodAssessmentData mood = MoodAssessmentData();
+  final MoodHistoryContext moodHistory = MoodHistoryContext();
   final Map<LifestyleField, double> lifestyle = {};
   final List<int> phq = [];
   final List<int> gad = [];
@@ -28,13 +115,14 @@ class ScreeningController extends ChangeNotifier {
   ScreeningCatalog? _catalog;
 
   static const int personalIndex = 0;
-  static const int lifestyleIndex = 1;
-  static const int phqIndex = 2;
-  static const int gadIndex = 3;
-  static const int pssIndex = 4;
-  static const int whoIndex = 5;
-  static const int reviewIndex = 6;
-  static const int totalSteps = 7;
+  static const int moodIndex = 1;
+  static const int lifestyleIndex = 2;
+  static const int phqIndex = 3;
+  static const int gadIndex = 4;
+  static const int pssIndex = 5;
+  static const int whoIndex = 6;
+  static const int reviewIndex = 7;
+  static const int totalSteps = 8;
 
   int stepIndex = 0;
   int questionIndex = 0;
@@ -73,6 +161,7 @@ class ScreeningController extends ChangeNotifier {
   }
 
   ScreeningArea get area => switch (stepIndex) {
+        moodIndex => ScreeningArea.mood,
         lifestyleIndex => ScreeningArea.lifestyle,
         phqIndex => ScreeningArea.phq,
         gadIndex => ScreeningArea.gad,
@@ -83,9 +172,12 @@ class ScreeningController extends ChangeNotifier {
       };
 
   bool get isQuestionArea =>
-      area != ScreeningArea.personal && area != ScreeningArea.review;
+      area != ScreeningArea.personal &&
+      area != ScreeningArea.mood &&
+      area != ScreeningArea.review;
 
   int get totalQuestions =>
+      1 +
       1 +
       lifestyleQuestions.length +
       phq.length +
@@ -95,6 +187,7 @@ class ScreeningController extends ChangeNotifier {
 
   int get answeredCount {
     var count = personal.isComplete ? 1 : 0;
+    if (mood.isComplete) count += 1;
     count += lifestyle.length;
     count += phq.where((e) => e >= 0).length;
     count += gad.where((e) => e >= 0).length;
@@ -105,6 +198,7 @@ class ScreeningController extends ChangeNotifier {
 
   bool get isComplete {
     if (!personal.isComplete) return false;
+    if (!mood.isComplete) return false;
     if (lifestyle.length != lifestyleQuestions.length) return false;
     return _allAnswered(phq) &&
         _allAnswered(gad) &&
@@ -116,6 +210,7 @@ class ScreeningController extends ChangeNotifier {
 
   int get currentStepItems => switch (area) {
         ScreeningArea.personal => 1,
+        ScreeningArea.mood => 1,
         ScreeningArea.lifestyle => lifestyleQuestions.length,
         ScreeningArea.phq => phq.length,
         ScreeningArea.gad => gad.length,
@@ -150,6 +245,7 @@ class ScreeningController extends ChangeNotifier {
     final catalog = _catalog;
     return switch (area) {
       ScreeningArea.personal => 'Personal Information',
+      ScreeningArea.mood => 'Mood Check-In',
       ScreeningArea.lifestyle => 'Lifestyle Assessment',
       ScreeningArea.phq => catalog?.phqTitle ?? 'PHQ-9 Assessment',
       ScreeningArea.gad => catalog?.gadTitle ?? 'GAD-7 Assessment',
@@ -163,6 +259,7 @@ class ScreeningController extends ChangeNotifier {
 
   bool get canContinue => switch (area) {
         ScreeningArea.personal => personal.isComplete,
+        ScreeningArea.mood => mood.isComplete,
         ScreeningArea.lifestyle =>
           _lifestyleAt(questionIndex) != null &&
               lifestyle.containsKey(_lifestyleAt(questionIndex)!.field),
@@ -185,6 +282,90 @@ class ScreeningController extends ChangeNotifier {
     if (age != null) personal.age = age;
     if (gender != null) personal.gender = gender;
     if (occupation != null) personal.occupation = occupation;
+    notifyListeners();
+  }
+
+  void setMoodId(String? moodId) {
+    mood.currentMoodId = moodId;
+    notifyListeners();
+  }
+
+  void setMoodEmotion(String? emotion) {
+    mood.emotion = emotion;
+    notifyListeners();
+  }
+
+  void setMoodIntensity(int value) {
+    mood.intensity = value.clamp(1, 10);
+    mood.intensityTouched = true;
+    notifyListeners();
+  }
+
+  void setMoodFrequency(String? frequency) {
+    mood.frequency = frequency;
+    notifyListeners();
+  }
+
+  void setMoodRecentChange(String? change) {
+    mood.recentChange = change;
+    notifyListeners();
+  }
+
+  void setMoodReflection(String reflection) {
+    mood.reflection = reflection;
+    notifyListeners();
+  }
+
+  void setMoodContext(String? context) {
+    mood.context = context;
+    notifyListeners();
+  }
+
+  void setLinkedMoodEntryId(String? id) {
+    mood.linkedMoodEntryId = id;
+    notifyListeners();
+  }
+
+  void setCameraResult(CameraMoodResult? result) {
+    mood.cameraResult = result;
+    notifyListeners();
+  }
+
+  /// Applies a fetched onboarding mood summary (single fetch per run).
+  /// History is displayed as-is; the trend is never recalculated here.
+  void applyMoodHistory(Map<String, dynamic> summary) {
+    final h = moodHistory;
+    h.loaded = true;
+    h.loading = false;
+    h.error = null;
+    h.hasHistory = summary['hasHistory'] == true;
+    final recent = summary['recent'];
+    h.recent = recent is List
+        ? [for (final e in recent) if (e is Map<String, dynamic>) e]
+        : const [];
+    h.trendDirection =
+        (summary['trendDirection'] as String?) ?? 'unknown';
+    h.trendDescription =
+        (summary['trendDescription'] as String?) ?? '';
+    final stats = summary['statistics'];
+    if (stats is Map) {
+      h.totalEntries = (stats['totalEntries'] as num?)?.toInt() ?? h.recent.length;
+      h.mostCommonMood = stats['mostCommonMood'] as String?;
+    }
+    notifyListeners();
+  }
+
+  void setMoodHistoryLoading() {
+    moodHistory.loading = true;
+    moodHistory.error = null;
+    notifyListeners();
+  }
+
+  void setMoodHistoryError(String message) {
+    moodHistory.loading = false;
+    moodHistory.loaded = true;
+    moodHistory.error = message;
+    moodHistory.hasHistory = false;
     notifyListeners();
   }
 
@@ -227,6 +408,10 @@ class ScreeningController extends ChangeNotifier {
   void next() {
     switch (area) {
       case ScreeningArea.personal:
+        stepIndex = moodIndex;
+        questionIndex = 0;
+        break;
+      case ScreeningArea.mood:
         stepIndex = lifestyleIndex;
         questionIndex = 0;
         break;
@@ -245,13 +430,19 @@ class ScreeningController extends ChangeNotifier {
 
   void back() {
     if (area == ScreeningArea.personal) return;
+    if (area == ScreeningArea.mood) {
+      stepIndex = personalIndex;
+      questionIndex = 0;
+      notifyListeners();
+      return;
+    }
     if (questionIndex > 0) {
       questionIndex--;
     } else if (stepIndex > lifestyleIndex) {
       stepIndex--;
       questionIndex = _itemsOf(stepIndex) - 1;
     } else if (stepIndex == lifestyleIndex) {
-      stepIndex = personalIndex;
+      stepIndex = moodIndex;
       questionIndex = 0;
     }
     notifyListeners();
@@ -265,6 +456,7 @@ class ScreeningController extends ChangeNotifier {
   }
 
   int _itemsOf(int step) => switch (step) {
+        moodIndex => 1,
         lifestyleIndex => lifestyleQuestions.length,
         phqIndex => phq.length,
         gadIndex => gad.length,

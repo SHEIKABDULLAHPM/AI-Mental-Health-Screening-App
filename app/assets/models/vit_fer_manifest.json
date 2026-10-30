@@ -1,0 +1,107 @@
+{
+  "architecture": "ViT-B/16 (12 layers, 12 heads, hidden 768, 197 patches, GAP+fc+softmax)",
+  "artifactChecksums": {
+    "vit_fer_fp16.tflite": "16aa6d6dea8477846a6e9ef87d0d89a8c0d815fa219bd2ad45fecd379643cda1"
+  },
+  "calibration": {
+    "eceAfter": 0.0496,
+    "eceBefore": 0.0496,
+    "method": "temperature_scaling",
+    "note": "Grid search over T in [0.5,8.0] on the 175-image independent validation set minimised NLL at T=0.96 (NLL 0.34343 vs 0.34389 at T=1.0), i.e. no meaningful improvement over an unscaled softmax, and ECE was slightly better at T=1.0. T=1.0 is therefore retained. The previous model family used T=0.8278; reusing it here was measured to be WORSE (NLL 0.34962) and was rejected rather than carried over.",
+    "temperature": 1.0
+  },
+  "channels": 3,
+  "checksum": "16aa6d6dea8477846a6e9ef87d0d89a8c0d815fa219bd2ad45fecd379643cda1",
+  "classes": [
+    "anger",
+    "disgust",
+    "fear",
+    "happy",
+    "neutral",
+    "sad",
+    "surprise"
+  ],
+  "classmapVersion": "mo-thecreator-vit-fer-7@v1",
+  "colorSpace": "RGB",
+  "createdAt": "2026-09-30T13:39:00+00:00",
+  "demo": false,
+  "format": "tflite",
+  "inputHeight": 224,
+  "inputWidth": 224,
+  "minimumConfidence": 0.6,
+  "minimumMargin": 0.1,
+  "modelId": "vit-fer-7",
+  "normalization": "MEAN_STD_0.5",
+  "parity": {
+    "fp16_max_abs_prob_diff_mean": 0.000147,
+    "fp16_max_abs_prob_diff_worst": 0.000922,
+    "fp16_vs_torch_label_agreement": "175/175",
+    "int8_note": "int8 post-training quantisation was built and REJECTED: 23/175 label agreement with the float model, 21/175 accuracy (12.0%), macro-F1 0.104, happy recall 0.000. The 171.9 MB fp16 artifact is shipped instead.",
+    "keras_vs_torch_max_abs_prob_diff": 7.39e-06,
+    "onnx_vs_torch_max_abs_prob_diff": 6.23e-06
+  },
+  "pendingValidation": [
+    "on-device load time, latency, RSS and FPS unmeasured: no SM-M325F was reachable over adb when the model was selected",
+    "GPU (GpuDelegateV2) support for this graph unverified on Mali; CPU fallback is the guaranteed path",
+    "distribution packaging: 171.9 MB exceeds a comfortable base-APK budget and may require Play Asset Delivery"
+  ],
+  "precision": "fp16",
+  "preprocessingVersion": "2.0.0",
+  "productionArtifact": "vit_fer_fp16.tflite",
+  "provenance": {
+    "architectureSource": "config.json of motheecreator/vit-Facial-Expression-Recognition (Hugging Face)",
+    "conversion": "Hugging Face ViTForImageClassification -> exact Keras reimplementation (app-level graph port) -> tf.lite.TFLiteConverter float16_weights",
+    "note": "onnx2tf's own float16 and SavedModel paths were both broken for this graph; the Keras reimplementation reproduces the PyTorch graph to 7.39e-06 max abs probability difference and is the conversion actually validated.",
+    "parameterCount": 85804039,
+    "trainingDatasetVersion": "UNDOCUMENTED - the upstream repository has no model card, so its FER training set is unknown and must not be assumed to match the independent validation set used here"
+  },
+  "qualityGate": {
+    "maxBrightness": 225.0,
+    "maxPitchDeg": 20.0,
+    "maxYawDeg": 25.0,
+    "minBrightness": 30.0,
+    "minContrast": 18.0,
+    "minFaceSizeRatio": 0.02,
+    "minSharpness": 12.0
+  },
+  "quantization": false,
+  "temporal": {
+    "emaAlpha": 0.5,
+    "minAgreement": 0.75,
+    "minStableFrames": 4,
+    "windowSize": 8
+  },
+  "tensorLayout": "NCHW",
+  "testAccuracy": 0.8685714285714286,
+  "testConfusionMatrix": [
+    [24, 0, 1, 0, 0, 0, 0],
+    [0, 23, 1, 0, 1, 0, 0],
+    [2, 0, 19, 0, 2, 1, 1],
+    [0, 0, 1, 22, 2, 0, 0],
+    [0, 0, 0, 3, 21, 0, 1],
+    [1, 0, 2, 0, 1, 20, 1],
+    [0, 0, 2, 0, 0, 0, 23]
+  ],
+  "testMacroF1": 0.8690,
+  "testPerClass": {
+    "anger": { "f1": 0.923, "precision": 0.889, "recall": 0.96 },
+    "disgust": { "f1": 0.958, "precision": 1.0, "recall": 0.92 },
+    "fear": { "f1": 0.745, "precision": 0.731, "recall": 0.76 },
+    "happy": { "f1": 0.88, "precision": 0.88, "recall": 0.88 },
+    "neutral": { "f1": 0.808, "precision": 0.778, "recall": 0.84 },
+    "sad": { "f1": 0.87, "precision": 0.952, "recall": 0.8 },
+    "surprise": { "f1": 0.902, "precision": 0.885, "recall": 0.92 }
+  },
+  "testSet": {
+    "gates": {
+      "macroF1": "PASS (0.869 >= 0.58)",
+      "worstClassRecall": "PASS (0.760 fear >= 0.35)"
+    },
+    "hostLatencyMsPerImage": 137,
+    "imagesPerClass": 25,
+    "note": "Single stratified sample, 25 images per class, seed 42, from the public wallbreaker01/Facial-Expression-Detection test split. Balanced by construction, so the confusion matrix is per-class counts and accuracy is not skewed by class frequency. Small enough that per-class metrics carry roughly +/-0.07 sampling error.",
+    "source": "wallbreaker01/Facial-Expression-Detection, test/",
+    "total": 175
+  },
+  "version": "1.0.0"
+}

@@ -22,20 +22,45 @@ class MoodDetailScreen extends StatefulWidget {
 }
 
 class _MoodDetailScreenState extends State<MoodDetailScreen> {
+  MoodEntry? _fetched;
+  bool _fetching = false;
+  bool _fetchStarted = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Fetch once from API if the entry is not in the local cache
+    // (e.g. deep-link). Guarded by _fetchStarted so rebuilds never loop.
+    if (!_fetchStarted) {
+      final controller =
+          Provider.of<MoodController>(context, listen: false);
+      final cached = controller.entries
+          .where((e) => e.id == widget.entryId)
+          .firstOrNull;
+      if (cached == null && !controller.loading) {
+        _fetchStarted = true;
+        _fetching = true;
+        controller.loadEntry(widget.entryId).then((result) {
+          if (!mounted) return;
+          setState(() {
+            _fetched = result;
+            _fetching = false;
+          });
+        });
+      } else {
+        _fetchStarted = true;
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final controller = Provider.of<MoodController>(context);
-    MoodEntry? entry = controller.entries.where((e) => e.id == widget.entryId).firstOrNull;
-    // Fetch from API if not found locally
-    if (entry == null && !controller.loading) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        final fetched = await controller.loadEntry(widget.entryId);
-        if (fetched != null && context.mounted) {
-          // State will rebuild via notifyListeners
-        }
-      });
-    }
+    MoodEntry? entry = controller.entries
+            .where((e) => e.id == widget.entryId)
+            .firstOrNull ??
+        _fetched;
 
     return FeatureScaffold(
       title: 'Mood entry',
@@ -46,12 +71,15 @@ class _MoodDetailScreenState extends State<MoodDetailScreen> {
           icon: const Icon(Icons.delete_outline_rounded),
         ),
       ],
-      body: entry == null
-          ? const ErrorStateView(
-              title: 'Entry not found',
-              message: 'This mood entry could not be found or was deleted.',
-            )
-          : ListView(
+      body: _fetching
+          ? const LoadingView()
+          : entry == null
+              ? const ErrorStateView(
+                  title: 'Entry not found',
+                  message:
+                      'This mood entry could not be found or was deleted.',
+                )
+              : ListView(
               padding: const EdgeInsets.fromLTRB(
                 AppSpacing.lg,
                 AppSpacing.md,
@@ -129,10 +157,17 @@ class _MoodDetailScreenState extends State<MoodDetailScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(context).pop();
-              controller.deleteMood(widget.entryId);
-              if (context.mounted) Navigator.of(context).pop();
+              await controller.deleteMood(widget.entryId);
+              if (!context.mounted) return;
+              if (controller.error != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(controller.error!)),
+                );
+                return;
+              }
+              Navigator.of(context).pop();
             },
             child: const Text('Delete'),
           ),

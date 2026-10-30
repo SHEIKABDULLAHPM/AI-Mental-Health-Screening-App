@@ -317,6 +317,10 @@ class FutureLetterServiceTest {
         when(repository.findByUserIdAndScheduledDateBeforeAndStatusOrderByScheduledDateAsc(
                 eq(USER_ID), any(LocalDate.class), eq("scheduled")))
                 .thenReturn(List.of(delivered));
+        // getDeliveredLetters fetches both "delivered" and "opened" buckets and
+        // concatenates them, so both repository calls have to be stubbed.
+        when(repository.findByUserIdAndStatusOrderByScheduledDateAsc(USER_ID, "delivered"))
+                .thenReturn(List.of(delivered));
         when(repository.findByUserIdAndStatusOrderByScheduledDateAsc(USER_ID, "opened"))
                 .thenReturn(List.of(opened));
 
@@ -331,6 +335,8 @@ class FutureLetterServiceTest {
     void getDeliveredLettersReturnsEmptyWhenNoneDelivered() {
         when(repository.findByUserIdAndScheduledDateBeforeAndStatusOrderByScheduledDateAsc(
                 eq(USER_ID), any(LocalDate.class), eq("scheduled")))
+                .thenReturn(Collections.emptyList());
+        when(repository.findByUserIdAndStatusOrderByScheduledDateAsc(USER_ID, "delivered"))
                 .thenReturn(Collections.emptyList());
         when(repository.findByUserIdAndStatusOrderByScheduledDateAsc(USER_ID, "opened"))
                 .thenReturn(Collections.emptyList());
@@ -374,15 +380,19 @@ class FutureLetterServiceTest {
     }
 
     @Test
-    void markAsOpenedRejectsIfAlreadyOpened() {
+    void markAsOpenedIsIdempotentIfAlreadyOpened() {
+        // markAsOpened treats an already-opened letter as a no-op and returns
+        // it unchanged rather than raising, so a retried request from the
+        // client is safe. It must not issue a redundant write.
         FutureLetter letter = buildLetter(LETTER_ID, USER_ID, "Title", "opened");
         when(repository.findByIdAndUserId(LETTER_ID, USER_ID))
                 .thenReturn(Optional.of(letter));
 
-        assertThatThrownBy(() -> service.markAsOpened(USER_ID, LETTER_ID))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getCode())
-                .isEqualTo(ErrorCode.BAD_REQUEST);
+        LetterResponse response = service.markAsOpened(USER_ID, LETTER_ID);
+
+        assertThat(response.id()).isEqualTo(LETTER_ID);
+        assertThat(response.status()).isEqualTo("opened");
+        verify(repository, never()).save(any());
     }
 
     @Test

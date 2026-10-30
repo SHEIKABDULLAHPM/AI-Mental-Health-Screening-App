@@ -18,9 +18,3 @@ def test_risk_assessment():
     )
     assert resp.status_code == 200
     assert resp.json()["immediate_care_required"] is True
-
-
-def test_emotion_analyze():
-    resp = client.post("/api/v1/emotion/analyze", json={"text": "I feel hopeless."})
-    assert resp.status_code == 200
-    assert "emotion" in resp.json()

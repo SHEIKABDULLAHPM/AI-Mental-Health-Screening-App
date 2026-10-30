@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mindease.backend.common.api.ApiResponse;
-import com.mindease.backend.screening.application.QuestionnaireCatalogService;
+import jakarta.validation.Valid;import com.mindease.backend.screening.application.QuestionnaireCatalogService;
 import com.mindease.backend.screening.application.ScreeningService;
 import com.mindease.backend.screening.domain.QuestionnaireCatalog;
 import com.mindease.backend.screening.domain.Screening;
@@ -42,7 +42,7 @@ public class ScreeningController {
     }
 
     @PostMapping
-    public ResponseEntity<ApiResponse<Screening>> create(@RequestBody Screening draft) {
+    public ResponseEntity<ApiResponse<Screening>> create(@Valid @RequestBody Screening draft) {
         String userId = AuthenticatedUser.currentId();
         ScreeningService.CreateResult result = service.create(userId, draft);
         return (result.created()
@@ -65,7 +65,7 @@ public class ScreeningController {
 
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<Screening>> update(
-            @PathVariable String id, @RequestBody Screening draft) {
+            @PathVariable String id, @Valid @RequestBody Screening draft) {
         String userId = AuthenticatedUser.currentId();
         return ResponseEntity.ok(ApiResponse.ok(service.update(userId, id, draft)));
     }

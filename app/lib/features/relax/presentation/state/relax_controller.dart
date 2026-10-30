@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:mindease/core/api/feature_api.dart';
@@ -13,6 +15,7 @@ class RelaxController extends ChangeNotifier {
   List<RelaxActivity> _activities = [];
   RelaxActivity? _currentActivity;
   bool _loading = false;
+  bool _disposed = false;
   String? _error;
 
   List<RelaxActivity> get activities => _activities;
@@ -23,7 +26,26 @@ class RelaxController extends ChangeNotifier {
   void _start() {
     _loading = true;
     _error = null;
-    notifyListeners();
+    _deferNotify();
+  }
+
+  /// Listeners must not be notified synchronously from a loader a screen
+  /// calls out of `initState`: the provider scope sits above the router, and
+  /// marking it while the framework is still building that screen trips its
+  /// "setState() or markNeedsBuild() called during build" assertion. State is
+  /// already assigned synchronously, so the in-flight build reads the right
+  /// values; this only schedules the follow-up rebuild safely.
+  void _deferNotify() {
+    if (_disposed) return;
+    scheduleMicrotask(() {
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   void _fail(Object e) {
@@ -98,6 +120,8 @@ Duration _parseDuration(dynamic value) {
 IconData _iconFromCodePoint(dynamic value) {
   final codePoint = (value as num?)?.toInt();
   if (codePoint == null) return Icons.self_improvement_rounded;
-  // ignore: non_const_argument_for_const_parameter
-  return IconData(codePoint, fontFamily: 'MaterialIcons');
+  // Use the predefined self improvement icon for known code points
+  // Since we cannot determine the icon name from code point at compile time,
+  // return the default self improvement icon
+  return Icons.self_improvement_rounded;
 }

@@ -17,11 +17,19 @@ _DIAGNOSIS_TERMS = (
     "patients with",
     "you have depression",
     "you have anxiety disorder",
+    "you have anxiety",
     "you have ptsd",
     "you have bipolar",
     "you have schizophrenia",
+    "you have depressive disorder",
+    "you have generalized anxiety disorder",
+    "you have clinical depression",
     "you are depressed",
     "you are clinically",
+    "depressive disorder",
+    "generalized anxiety disorder",
+    "clinical depression",
+    "diagnosis:",
 )
 
 
@@ -63,7 +71,13 @@ class AiInsightResult(_Strict):
 
 
 class ScreeningScoresInput(_Strict):
-    """Minimal, anonymized deterministic scores sent to the LLM (no raw answers)."""
+    """Minimal, anonymized deterministic scores sent to the LLM (no raw answers).
+
+    Mood context fields are all optional so jobs created before the Mood
+    Check-In onboarding integration keep validating. When present they carry
+    only structured, server-derived signals: the self-reported mood stays the
+    primary signal, trend/history are deterministic derivations.
+    """
 
     phq9: int = Field(ge=0, le=27)
     gad7: int = Field(ge=0, le=21)
@@ -74,7 +88,25 @@ class ScreeningScoresInput(_Strict):
     lifestyleScore: int = Field(ge=0, le=100)
     sleepQuality: str
     primaryFocus: str
+    onboardingMood: str | None = None
+    onboardingMoodScore: int | None = Field(default=None, ge=1, le=6)
+    onboardingMoodEmotion: str | None = None
+    onboardingMoodIntensity: int | None = Field(default=None, ge=1, le=10)
+    moodTrendDirection: str | None = None
+    moodTrendDescription: str | None = None
+    moodHistoryCount: int | None = Field(default=None, ge=0)
+    # Optional camera supporting signal, extracted server-side from the
+    # linked mood entry's CAMERA AI observation (never raw frames).
+    cameraEmotion: str | None = None
+    cameraConfidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    cameraModelVersion: str | None = None
+    # Deterministic verdict computed server-side: agree|close|differs|noSignal.
+    signalAgreement: str | None = None
 
     @property
     def who_percent(self) -> int:
         return min(self.who5 * 4, 100)
+
+    @property
+    def has_mood_context(self) -> bool:
+        return bool(self.onboardingMood and self.onboardingMood.strip())

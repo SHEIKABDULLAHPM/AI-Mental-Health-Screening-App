@@ -21,6 +21,7 @@ import com.mindease.backend.features.habits.domain.Habit;
 import com.mindease.backend.features.habits.domain.HabitRepository;
 import com.mindease.backend.features.journal.domain.JournalEntry;
 import com.mindease.backend.features.journal.domain.JournalEntryRepository;
+import com.mindease.backend.features.mood.application.MoodTrendAnalyzer;
 import com.mindease.backend.features.mood.domain.MoodEntry;
 import com.mindease.backend.features.mood.domain.MoodEntryRepository;
 import com.mindease.backend.features.recommendations.domain.RecommendationContentRepository;
@@ -55,6 +56,7 @@ public class ProgressService {
     private final PersonalizationService personalizationService;
 
     private final com.mindease.backend.features.habits.domain.HabitRepository habitRepo;
+    private final MoodTrendAnalyzer moodTrendAnalyzer;
     @SuppressWarnings("unused") // Used in engagement calculation
 
     public ProgressService(
@@ -64,7 +66,8 @@ public class ProgressService {
             ConversationRepository conversationRepo,
             WellnessProfileRepository wellnessRepo,
             PersonalizationService personalizationService,
-            HabitRepository habitRepo) {
+            HabitRepository habitRepo,
+            MoodTrendAnalyzer moodTrendAnalyzer) {
         this.moodRepo = moodRepo;
         this.journalRepo = journalRepo;
         this.interactionRepo = interactionRepo;
@@ -72,6 +75,7 @@ public class ProgressService {
         this.wellnessRepo = wellnessRepo;
         this.personalizationService = personalizationService;
         this.habitRepo = habitRepo;
+        this.moodTrendAnalyzer = moodTrendAnalyzer;
     }
 
     /**
@@ -375,45 +379,17 @@ public class ProgressService {
     }
 
     // ── Trend computation ──
+    // Single source of truth: MoodTrendAnalyzer. This wrapper only extracts
+    // the direction string for the progress DTO — no forked math.
 
     private String computeMoodTrend(List<MoodEntry> entries) {
-        if (entries.size() < 3) return "unknown";
-
-        Map<String, Integer> moodValues = Map.of(
-                "very_happy", 6, "happy", 5, "calm", 4,
-                "okay", 3, "low", 2, "stressed", 1);
-
-        List<Double> dailyValues = new ArrayList<>();
-        ZoneId utc = ZoneId.of("UTC");
-        LocalDate today = LocalDate.now(utc);
-
-        // Group by day, compute averages
-        Map<LocalDate, List<MoodEntry>> byDay = entries.stream()
-                .filter(e -> e.getRecordedAt() != null)
-                .collect(Collectors.groupingBy(
-                        e -> e.getRecordedAt().atZone(utc).toLocalDate(),
-                        LinkedHashMap::new,
-                        Collectors.toList()));
-
-        for (var entry : byDay.entrySet()) {
-            double avg = entry.getValue().stream()
-                    .mapToInt(e -> moodValues.getOrDefault(e.getMood(), 3))
-                    .average()
-                    .orElse(3.0);
-            dailyValues.add(avg);
+        try {
+            Object direction = moodTrendAnalyzer.analyzeTrend(entries).get("direction");
+            return direction instanceof String s ? s : "unknown";
+        } catch (Exception e) {
+            log.debug("Could not compute mood trend: {}", e.getMessage());
+            return "unknown";
         }
-
-        if (dailyValues.size() < 2) return "stable";
-
-        int mid = dailyValues.size() / 2;
-        double firstHalf = dailyValues.subList(0, mid).stream()
-                .mapToDouble(Double::doubleValue).average().orElse(0);
-        double secondHalf = dailyValues.subList(mid, dailyValues.size()).stream()
-                .mapToDouble(Double::doubleValue).average().orElse(0);
-        double diff = secondHalf - firstHalf;
-
-        if (Math.abs(diff) < 0.3) return "stable";
-        return diff > 0 ? "improving" : "declining";
     }
 
     // ── Insights generation ──

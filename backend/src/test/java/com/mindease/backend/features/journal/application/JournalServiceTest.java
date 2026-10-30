@@ -10,8 +10,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+
+import org.springframework.data.domain.Pageable;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.journal.domain.JournalEntry;
 import com.mindease.backend.features.journal.domain.JournalEntryRepository;
 import com.mindease.backend.personalization.application.PersonalizationService;
@@ -45,7 +49,11 @@ class JournalServiceTest {
     @Mock
     private PersonalizationService personalizationService;
 
+    @Mock
+    private ChallengeActivityService challengeActivityService;
+
     private JournalService service;
+    private JournalCipher cipher;
 
     private static final String USER_ID = "user-1";
     private static final String JOURNAL_ID = "journal-1";
@@ -53,7 +61,9 @@ class JournalServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new JournalService(repository, mediaService, aiClient, personalizationService);
+        cipher = new JournalCipher("test-journal-encryption-key-0123456789");
+        service = new JournalService(repository, mediaService, aiClient,
+                personalizationService, challengeActivityService, cipher);
     }
 
     // --------------------------------------------------------------- createJournal
@@ -176,14 +186,36 @@ class JournalServiceTest {
     void getJournalEntriesWithSearch() {
         List<JournalEntry> searchResults = List.of(
                 createJournalEntity("s-1", USER_ID, "text", "Meditation Experience"));
-        when(repository.searchByUserIdAndText(eq(USER_ID), eq(java.util.regex.Pattern.quote("meditation")), any()))
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq(USER_ID), any()))
                 .thenReturn(searchResults);
 
         JournalListResponse result = service.getJournalEntries(USER_ID, 0, 10, null, "meditation");
 
         assertThat(result.entries()).hasSize(1);
         assertThat(result.entries().get(0).title()).isEqualTo("Meditation Experience");
-        verify(repository).searchByUserIdAndText(eq(USER_ID), eq(java.util.regex.Pattern.quote("meditation")), any());
+        verify(repository).findByUserIdOrderByCreatedAtDesc(eq(USER_ID), any());
+    }
+
+    @Test
+    void searchCoversTheWholeArchiveNotOnlyTheNewestWindow() {
+        // A full first chunk with no match: the old "newest 1,000" scan would
+        // only ever have seen rows like these and reported no result.
+        List<JournalEntry> firstChunk = new ArrayList<>();
+        for (int i = 0; i < 500; i++) {
+            firstChunk.add(createJournalEntity("new-" + i, USER_ID, "text", "Recent #" + i));
+        }
+        List<JournalEntry> secondChunk = List.of(
+                createJournalEntity("old-1", USER_ID, "text", "Childhood memory"));
+        when(repository.findByUserIdOrderByCreatedAtDesc(eq(USER_ID), any()))
+                .thenAnswer(inv -> ((Pageable) inv.getArgument(1)).getPageNumber() == 0
+                        ? firstChunk
+                        : secondChunk);
+
+        JournalListResponse result = service.getJournalEntries(USER_ID, 0, 10, null, "childhood");
+
+        assertThat(result.total()).isEqualTo(1);
+        assertThat(result.entries()).hasSize(1);
+        assertThat(result.entries().get(0).id()).isEqualTo("old-1");
     }
 
     @Test
@@ -326,6 +358,62 @@ class JournalServiceTest {
                     assertThat(ex.getMessage()).contains("Journal entry not found");
                 });
         verify(repository, never()).delete(any());
+    }
+
+    // ------------------------------------------------------------- encryption
+
+    @Test
+    void journalTextIsEncryptedAtRestAndDecryptedOnRead() {
+        CreateJournalRequest request = new CreateJournalRequest(
+                "Private title", "A very private journal body", "text", null,
+                null, null, null, null, null, null, null,
+                null, null, null, null);
+        when(repository.save(any())).thenAnswer(inv -> {
+            JournalEntry entry = inv.getArgument(0);
+            entry.setId(JOURNAL_ID);
+            return entry;
+        });
+
+        JournalResponse response = service.createJournal(USER_ID, request);
+
+        org.mockito.ArgumentCaptor<JournalEntry> saved =
+                org.mockito.ArgumentCaptor.forClass(JournalEntry.class);
+        verify(repository).save(saved.capture());
+        assertThat(saved.getValue().getTitle()).startsWith(JournalCipher.PREFIX);
+        assertThat(saved.getValue().getContent()).startsWith(JournalCipher.PREFIX);
+        assertThat(saved.getValue().getContent()).doesNotContain("very private");
+        // The API response is always plaintext for the owner.
+        assertThat(response.title()).isEqualTo("Private title");
+        assertThat(response.content()).isEqualTo("A very private journal body");
+    }
+
+    @Test
+    void legacyPlaintextRowsStayReadable() {
+        JournalEntry legacy = createJournalEntity(JOURNAL_ID, USER_ID, "text", "Old entry");
+        when(repository.findByIdAndUserId(JOURNAL_ID, USER_ID)).thenReturn(Optional.of(legacy));
+
+        JournalResponse response = service.getJournalById(USER_ID, JOURNAL_ID);
+
+        assertThat(response.title()).isEqualTo("Old entry");
+        assertThat(response.content()).contains("Old entry");
+    }
+
+    @Test
+    void updateComparesDecryptedContentAndReEncrypts() {
+        JournalEntry entry = createJournalEntity(JOURNAL_ID, USER_ID, "text", "Title");
+        entry.setContent(cipher.encrypt("original body"));
+        when(repository.findByIdAndUserId(JOURNAL_ID, USER_ID)).thenReturn(Optional.of(entry));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateJournalRequest request = new UpdateJournalRequest(
+                "Title", "changed body", null, null,
+                null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null);
+        JournalResponse response = service.updateJournal(USER_ID, JOURNAL_ID, request);
+
+        assertThat(response.content()).isEqualTo("changed body");
+        assertThat(entry.getContent()).startsWith(JournalCipher.PREFIX);
+        assertThat(entry.getContent()).isNotEqualTo("changed body");
     }
 
     // --------------------------------------------------------------- helpers

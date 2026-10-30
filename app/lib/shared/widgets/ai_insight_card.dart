@@ -22,7 +22,7 @@ class AIInsightCard extends StatelessWidget {
     this.compact = false,
   });
 
-  /// Card header label (e.g. "Today's AI Insight", "Suggested for today").
+  /// Card header label (e.g. "Your latest AI insight", "Suggested for today").
   final String title;
 
   /// The raw AI-generated insight text. May contain multiple sentences

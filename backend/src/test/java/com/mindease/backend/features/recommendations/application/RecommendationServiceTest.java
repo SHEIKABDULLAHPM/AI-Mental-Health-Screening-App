@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mindease.backend.common.error.ApiException;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.recommendations.domain.RecommendationContent;
 import com.mindease.backend.features.recommendations.domain.RecommendationContentRepository;
 import com.mindease.backend.features.recommendations.domain.RecommendationInteractionRepository;
@@ -45,11 +46,15 @@ class RecommendationServiceTest {
     @Mock
     private PersonalizationService personalizationService;
 
+    @Mock
+    private ChallengeActivityService challengeActivityService;
+
     private RecommendationService service;
 
     @BeforeEach
     void setUp() {
-        service = new RecommendationService(contentRepo, interactionRepo, contextBuilder, rankingService, personalizationService);
+        service = new RecommendationService(contentRepo, interactionRepo, contextBuilder,
+                rankingService, personalizationService, challengeActivityService);
     }
 
     // ── getRecommendations ──

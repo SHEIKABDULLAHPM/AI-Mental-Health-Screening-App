@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import 'package:mindease/core/api/models.dart';
 import 'package:mindease/core/constants/moods.dart';
 import 'package:mindease/core/di/app_services.dart';
 import 'package:mindease/core/theme/app_colors.dart';
@@ -15,7 +16,11 @@ import 'package:mindease/shared/widgets/app_logout_tile.dart';
 import 'package:mindease/shared/widgets/app_section_card.dart';
 import 'package:mindease/shared/widgets/feature_grid_tile.dart';
 import 'package:mindease/shared/widgets/ring_painter.dart';
+import 'package:mindease/shared/widgets/safety_support_card.dart';
+import 'package:mindease/shared/widgets/wellness_analysis_result_card.dart';
 import 'package:mindease/features/dashboard/presentation/state/progress_controller.dart';
+import 'package:mindease/features/physical_wellness/presentation/state/lifestyle_wellness_controller.dart';
+import 'package:mindease/features/recommendations/presentation/state/recommendation_controller.dart';
 
 /// Landing page after onboarding — the feature hub entry point.
 class DashboardScreen extends StatefulWidget {
@@ -30,6 +35,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _name = 'there';
   int? _score;
   String _insight = '';
+  bool _safetyFlag = false;
+  bool _loadingCombined = false;
+  bool _loadingMental = false;
 
   @override
   void initState() {
@@ -49,6 +57,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _name = dash.name;
         _score = dash.wellnessScore;
         _insight = dash.todayInsight ?? '';
+        _safetyFlag = dash.safetyFlag;
       });
     } on Object {
       // Keep the default greeting; the name/score come from the backend.
@@ -74,6 +83,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _tabIndex = index);
   }
 
+  Future<void> _analyzeCombinedWellness() async {
+    if (_loadingCombined) return;
+    setState(() => _loadingCombined = true);
+    try {
+      final result = await wellnessAnalysisApi.analyzeCombinedWellness();
+      if (!mounted) return;
+      if (result.narrative != null && result.narrative!.trim().isNotEmpty) {
+        setState(() {
+          _insight = result.narrative!.trim();
+        });
+      }
+      await showWellnessAnalysisSheet(
+        context,
+        WellnessAnalysisResult.combined(result),
+      );
+      // Sync recommendations & targets
+      if (mounted) {
+        context.read<RecommendationController>().loadRecommendations();
+        try {
+          context.read<LifestyleWellnessController>().refreshAll();
+        } catch (_) {}
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Could not run the combined analysis. Check your connection and try again.',
+          ),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: _analyzeCombinedWellness,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingCombined = false);
+    }
+  }
+
+  Future<void> _analyzeMentalWellness() async {
+    if (_loadingMental) return;
+    setState(() => _loadingMental = true);
+    try {
+      final result = await wellnessAnalysisApi.analyzeMentalWellness();
+      if (!mounted) return;
+      await showWellnessAnalysisSheet(
+        context,
+        WellnessAnalysisResult.mental(result),
+      );
+      // Sync recommendations & targets
+      if (mounted) {
+        context.read<RecommendationController>().loadRecommendations();
+        try {
+          context.read<LifestyleWellnessController>().refreshAll();
+        } catch (_) {}
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Could not run the mental wellness analysis. Check your connection and try again.',
+          ),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: _analyzeMentalWellness,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingMental = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -85,6 +169,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             greeting: _greeting,
             score: _score,
             insight: _insightText,
+            safetyFlag: _safetyFlag,
+            loadingCombined: _loadingCombined,
+            onAnalyzeCombined: _analyzeCombinedWellness,
           ),
           const _CheckInTab(),
           const AiCoachHomeScreen(),
@@ -133,12 +220,18 @@ class _HomeTab extends StatelessWidget {
     required this.greeting,
     required this.score,
     required this.insight,
+    required this.safetyFlag,
+    required this.loadingCombined,
+    required this.onAnalyzeCombined,
   });
 
   final String name;
   final String greeting;
   final int? score;
   final String insight;
+  final bool safetyFlag;
+  final bool loadingCombined;
+  final VoidCallback onAnalyzeCombined;
 
   @override
   Widget build(BuildContext context) {
@@ -155,14 +248,17 @@ class _HomeTab extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _Header(name: name, greeting: greeting),
+            if (safetyFlag) ...[
+              const SizedBox(height: AppSpacing.md),
+              const SafetySupportCard(),
+            ],
             const SizedBox(height: AppSpacing.lg),
             _WellnessScoreCard(score: score),
             const SizedBox(height: AppSpacing.md),
-            AIInsightCard(
-              title: "Today's AI Insight",
-              text: insight,
-              icon: Icons.auto_awesome_rounded,
-              iconColor: theme.colorScheme.tertiary,
+            UnifiedAiInsightCard(
+              insight: insight,
+              loading: loadingCombined,
+              onAnalyzeCombined: onAnalyzeCombined,
             ),
             const SizedBox(height: AppSpacing.lg),
             Text(
@@ -236,6 +332,13 @@ class _HomeTab extends StatelessWidget {
                   color: const Color(0xFF37A2E8),
                   onTap: () => context.push('/letters'),
                 ),
+                FeatureGridTile(
+                  icon: Icons.watch_rounded,
+                  label: 'Physical Wellness',
+                  subtitle: 'Steps & sleep',
+                  color: const Color(0xFF26A69A),
+                  onTap: () => context.push('/physical-wellness'),
+                ),
               ],
             ),
           ],
@@ -250,7 +353,6 @@ class _Header extends StatelessWidget {
 
   final String name;
   final String greeting;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -296,7 +398,6 @@ class _Avatar extends StatelessWidget {
   const _Avatar({required this.initial});
 
   final String initial;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -314,8 +415,7 @@ class _Avatar extends StatelessWidget {
   }
 }
 
-class _NotificationButton extends StatelessWidget {
-  @override
+class _NotificationButton extends StatelessWidget {  @override
   Widget build(BuildContext context) {
     return Stack(
       clipBehavior: Clip.none,
@@ -346,7 +446,6 @@ class _WellnessScoreCard extends StatelessWidget {
   const _WellnessScoreCard({required this.score});
 
   final int? score;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -425,7 +524,6 @@ class _ProfileTab extends StatelessWidget {
   const _ProfileTab({required this.name});
 
   final String name;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -488,6 +586,25 @@ class _ProfileTab extends StatelessWidget {
                 ),
                 const SizedBox(height: AppSpacing.lg),
                 AppSectionCard(
+                  icon: Icons.history_rounded,
+                  iconColor: AppColors.tertiary,
+                  title: 'Assessments',
+                  subtitle: 'Review the screenings stored on your account.',
+                  children: [
+                    const SizedBox(height: AppSpacing.xs),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.fact_check_outlined),
+                      title: const Text('Assessment history'),
+                      subtitle:
+                          const Text('Dates, status and answered sections'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => context.push('/assessment-history'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                AppSectionCard(
                   icon: Icons.security_rounded,
                   iconColor: theme.colorScheme.secondary,
                   title: 'Account',
@@ -510,7 +627,6 @@ class _ProfileTab extends StatelessWidget {
 /// Daily Check-in tab: quick mood record + short screening entry.
 class _CheckInTab extends StatelessWidget {
   const _CheckInTab();
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -553,7 +669,8 @@ class _CheckInTab extends StatelessWidget {
                     for (final mood in kMoods)
                       Expanded(
                         child: InkWell(
-                          borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                          borderRadius:
+                              BorderRadius.circular(AppSpacing.radiusMd),
                           onTap: () => context.push('/mood-record'),
                           child: Padding(
                             padding: const EdgeInsets.all(AppSpacing.xs),
@@ -614,6 +731,11 @@ class _CheckInTab extends StatelessWidget {
                     label: const Text('Start screening'),
                   ),
                 ),
+                TextButton.icon(
+                  onPressed: () => context.push('/assessment-history'),
+                  icon: const Icon(Icons.history_rounded, size: 18),
+                  label: const Text('View past assessments'),
+                ),
               ],
             ),
           ],
@@ -642,7 +764,6 @@ class _ProgressTabState extends State<_ProgressTab> {
       }
     });
   }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -775,7 +896,6 @@ class _ProgressTabState extends State<_ProgressTab> {
 class _WellnessScoreSection extends StatelessWidget {
   const _WellnessScoreSection({required this.ctrl});
   final ProgressController ctrl;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -850,7 +970,6 @@ class _WellnessScoreSection extends StatelessWidget {
 class _MoodProgressSection extends StatelessWidget {
   const _MoodProgressSection({required this.ctrl});
   final ProgressController ctrl;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -944,7 +1063,8 @@ class _MoodProgressSection extends StatelessWidget {
                         child: LinearProgressIndicator(
                           value: pct.toDouble(),
                           minHeight: 8,
-                          backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                          backgroundColor:
+                              theme.colorScheme.surfaceContainerHighest,
                         ),
                       ),
                     ),
@@ -970,7 +1090,6 @@ class _MoodProgressSection extends StatelessWidget {
 class _JournalProgressSection extends StatelessWidget {
   const _JournalProgressSection({required this.ctrl});
   final ProgressController ctrl;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1044,7 +1163,6 @@ class _JournalProgressSection extends StatelessWidget {
 class _ActivitiesSection extends StatelessWidget {
   const _ActivitiesSection({required this.ctrl});
   final ProgressController ctrl;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1103,7 +1221,6 @@ class _ActivitiesSection extends StatelessWidget {
 class _EngagementSection extends StatelessWidget {
   const _EngagementSection({required this.ctrl});
   final ProgressController ctrl;
-
   @override
   Widget build(BuildContext context) {
     return AppSectionCard(
@@ -1144,7 +1261,6 @@ class _EngagementSection extends StatelessWidget {
 class _InsightsSection extends StatelessWidget {
   const _InsightsSection({required this.ctrl});
   final ProgressController ctrl;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1162,10 +1278,12 @@ class _InsightsSection extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        ...insights.map((insight) => Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-              child: _InsightTile(insight: insight),
-            ),),
+        ...insights.map(
+          (insight) => Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: _InsightTile(insight: insight),
+          ),
+        ),
       ],
     );
   }
@@ -1176,7 +1294,6 @@ class _InsightsSection extends StatelessWidget {
 class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.message});
   final String message;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1217,7 +1334,6 @@ class _StatTile extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1228,7 +1344,8 @@ class _StatTile extends StatelessWidget {
           vertical: AppSpacing.md,
         ),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          color:
+              theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
         ),
         child: Column(
@@ -1258,16 +1375,31 @@ class _StatTile extends StatelessWidget {
 class _TrendChip extends StatelessWidget {
   const _TrendChip({required this.trend});
   final String trend;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (label, icon, color) = switch (trend) {
-      'improving' => ('Improving', Icons.trending_up_rounded, AppColors.success),
-      'declining' => ('Needs attention', Icons.trending_down_rounded, AppColors.error),
-      'stable' => ('Stable', Icons.remove_rounded, theme.colorScheme.onSurfaceVariant),
+      'improving' => (
+          'Improving',
+          Icons.trending_up_rounded,
+          AppColors.success
+        ),
+      'declining' => (
+          'Needs attention',
+          Icons.trending_down_rounded,
+          AppColors.error
+        ),
+      'stable' => (
+          'Stable',
+          Icons.remove_rounded,
+          theme.colorScheme.onSurfaceVariant
+        ),
       'fluctuating' => ('Varying', Icons.swap_vert_rounded, AppColors.warning),
-      _ => ('Unknown', Icons.help_outline_rounded, theme.colorScheme.onSurfaceVariant),
+      _ => (
+          'Unknown',
+          Icons.help_outline_rounded,
+          theme.colorScheme.onSurfaceVariant
+        ),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1297,7 +1429,6 @@ class _InfoChip extends StatelessWidget {
   const _InfoChip({required this.label, required this.color});
   final String label;
   final Color color;
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1317,15 +1448,30 @@ class _InfoChip extends StatelessWidget {
 class _ConsistencyBadge extends StatelessWidget {
   const _ConsistencyBadge({required this.level});
   final String level;
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (label, icon, color) = switch (level) {
-      'high' => ('High consistency', Icons.emoji_events_rounded, AppColors.success),
-      'moderate' => ('Moderate consistency', Icons.trending_up_rounded, AppColors.warning),
-      'low' => ('Getting started', Icons.hourglass_top_rounded, theme.colorScheme.primary),
-      _ => ('Inactive', Icons.hourglass_empty_rounded, theme.colorScheme.onSurfaceVariant),
+      'high' => (
+          'High consistency',
+          Icons.emoji_events_rounded,
+          AppColors.success
+        ),
+      'moderate' => (
+          'Moderate consistency',
+          Icons.trending_up_rounded,
+          AppColors.warning
+        ),
+      'low' => (
+          'Getting started',
+          Icons.hourglass_top_rounded,
+          theme.colorScheme.primary
+        ),
+      _ => (
+          'Inactive',
+          Icons.hourglass_empty_rounded,
+          theme.colorScheme.onSurfaceVariant
+        ),
     };
     return Container(
       padding: const EdgeInsets.all(AppSpacing.sm),
@@ -1365,7 +1511,6 @@ class _InsightTile extends StatelessWidget {
       _ => Icons.lightbulb_rounded,
     };
   }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1445,3 +1590,168 @@ String _activityLabel(String level) {
   };
 }
 
+class _MentalAnalysisCard extends StatelessWidget {
+  const _MentalAnalysisCard({required this.onAnalyze});
+
+  final VoidCallback onAnalyze;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppSectionCard(
+      icon: Icons.psychology_alt_rounded,
+      iconColor: theme.colorScheme.tertiary,
+      title: 'Mental Wellness',
+      subtitle: 'Analyze your mental wellbeing',
+      children: [
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Analyze your latest screening, mood check-ins and journal trends, then '
+          'compare the result with your previous analysis.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            height: 1.5,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: onAnalyze,
+            icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+            label: const Text('Analyze Mental Wellness'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class UnifiedAiInsightCard extends StatelessWidget {
+  const UnifiedAiInsightCard({
+    super.key,
+    required this.insight,
+    required this.loading,
+    required this.onAnalyzeCombined,
+  });
+
+  final String insight;
+  final bool loading;
+  final VoidCallback onAnalyzeCombined;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primaryColor = theme.colorScheme.primary;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: primaryColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 20,
+                    color: primaryColor,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Latest AI Insight',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: primaryColor,
+                        ),
+                      ),
+                      Text(
+                        'Holistic mental & physical analysis',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              insight,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                height: 1.55,
+              ),
+            ),
+            if (loading) ...[
+              const SizedBox(height: AppSpacing.md),
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                decoration: BoxDecoration(
+                  color: primaryColor.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: primaryColor,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        'Analyzing your combined wellness data with AI...',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: primaryColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.md),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: loading ? null : onAnalyzeCombined,
+                icon: loading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.auto_awesome_rounded, size: 18),
+                label: Text(
+                  loading
+                      ? 'Analyzing Combined Wellness...'
+                      : 'Analyze Combined Wellness',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

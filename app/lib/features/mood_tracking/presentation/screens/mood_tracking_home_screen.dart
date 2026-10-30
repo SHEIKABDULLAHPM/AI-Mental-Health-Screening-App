@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:mindease/core/constants/moods.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/features/mood_tracking/data/mood_entry.dart';
+import 'package:mindease/features/mood_tracking/domain/emotion/fer_preloader.dart';
 import 'package:mindease/features/mood_tracking/presentation/screens/camera_mood_screen.dart';
 import 'package:mindease/features/mood_tracking/presentation/state/mood_controller.dart';
 import 'package:mindease/features/mood_tracking/presentation/widgets/mood_widgets.dart';
@@ -34,6 +35,9 @@ class _MoodTrackingHomeScreenState extends State<MoodTrackingHomeScreen> {
         controller.loadRecentEntries(limit: 10);
         controller.loadStatistics();
         controller.loadEnhancedTrends(days: 14);
+        // Fire-and-forget: warm the emotion interpreter while the user
+        // browses, so the camera check-in opens ready. Never throws.
+        FerPreloader.warmup();
       }
     });
   }
@@ -55,7 +59,9 @@ class _MoodTrackingHomeScreenState extends State<MoodTrackingHomeScreen> {
 
     final today =
         entries.where((e) => _isSameDay(e.date, DateTime.now())).toList();
-    final latestTodayId = today.isNotEmpty ? today.last.id : null;
+    // Entries arrive newest-first from the backend, so the latest check-in
+    // today is the first element — not the last.
+    final latestTodayId = today.isNotEmpty ? today.first.id : null;
 
     // Show recent moods: prefer the dedicated recent endpoint (already sorted
     // newest-first), falling back to the full entries list. Exclude only the
@@ -269,7 +275,8 @@ class _TodayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final latest = today.isNotEmpty ? today.last : null;
+    // `today` is newest-first (backend order), so latest = first.
+    final latest = today.isNotEmpty ? today.first : null;
     final mood = latest == null ? null : moodById(latest.moodId);
 
     return Card(
@@ -278,22 +285,26 @@ class _TodayCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Text(
+              "Today's mood",
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            // Wrap instead of a single Row: the two labelled buttons plus the
+            // title cannot share a line on a 320 dp screen or at 1.5x text
+            // scale, which overflowed by 51 px.
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              alignment: WrapAlignment.end,
               children: [
-                Expanded(
-                  child: Text(
-                    "Today's mood",
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
                 FilledButton.tonalIcon(
                   onPressed: onCamera,
                   icon: const Icon(Icons.camera_alt_rounded, size: 18),
                   label: const Text('Camera'),
                 ),
-                const SizedBox(width: AppSpacing.sm),
                 FilledButton.tonalIcon(
                   onPressed: onRecord,
                   icon: const Icon(Icons.add_rounded, size: 18),

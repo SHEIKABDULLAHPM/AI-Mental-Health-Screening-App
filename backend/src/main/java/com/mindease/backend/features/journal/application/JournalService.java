@@ -1,7 +1,9 @@
 package com.mindease.backend.features.journal.application;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.journal.domain.JournalEntry;
 import com.mindease.backend.features.journal.domain.JournalEntryRepository;
 import com.mindease.backend.personalization.application.PersonalizationService;
@@ -31,19 +34,38 @@ public class JournalService {
     private static final Logger log = LoggerFactory.getLogger(JournalService.class);
     private static final Set<String> VALID_TYPES = Set.of("text", "voice", "image", "video");
     private static final int MAX_PAGE_SIZE = 50;
+    /**
+     * Search runs after decryption because content is encrypted at rest, so it
+     * pages through the caller's own entries in chunks. The whole archive is
+     * searched — there is no "newest N" window — while memory stays bounded to
+     * one chunk at a time.
+     */
+    private static final int SEARCH_PAGE_SIZE = 500;
+    /**
+     * Hard per-request ceiling. A single search never decrypts more than this
+     * many rows, so an adversarially large archive cannot be turned into an
+     * unbounded CPU/memory sink. Reaching it makes {@code hasMore} true rather
+     * than silently returning a wrong total.
+     */
+    private static final int MAX_SEARCH_SCAN = 20_000;
     private static final ExecutorService AI_EXECUTOR = Executors.newFixedThreadPool(2);
 
     private final JournalEntryRepository repository;
     private final MediaService mediaService;
     private final JournalAiClient aiClient;
     private final PersonalizationService personalizationService;
+    private final ChallengeActivityService challengeActivityService;
+    private final JournalCipher cipher;
 
     public JournalService(JournalEntryRepository repository, MediaService mediaService,
-            JournalAiClient aiClient, PersonalizationService personalizationService) {
+            JournalAiClient aiClient, PersonalizationService personalizationService,
+            ChallengeActivityService challengeActivityService, JournalCipher cipher) {
         this.repository = repository;
         this.mediaService = mediaService;
         this.aiClient = aiClient;
         this.personalizationService = personalizationService;
+        this.challengeActivityService = challengeActivityService;
+        this.cipher = cipher;
     }
 
     /**
@@ -66,7 +88,7 @@ public class JournalService {
                 && entry.getVideoKey().startsWith("journal/" + userId + "/")) {
             videoUrl = mediaService.getPresignedUrl(entry.getVideoKey());
         }
-        return JournalResponse.from(entry, imageUrl, audioUrl, videoUrl);
+        return JournalResponse.from(entry, imageUrl, audioUrl, videoUrl, cipher::decrypt);
     }
 
     public JournalResponse createJournal(String userId, CreateJournalRequest request) {
@@ -87,8 +109,9 @@ public class JournalService {
 
         JournalEntry entry = new JournalEntry();
         entry.setUserId(userId);
-        entry.setTitle(request.title());
-        entry.setContent(request.content() != null ? request.content() : "");
+        // Title and body are sealed at rest; the API always returns plaintext.
+        entry.setTitle(cipher.encrypt(request.title()));
+        entry.setContent(cipher.encrypt(request.content() != null ? request.content() : ""));
         entry.setType(request.type());
         entry.setEmotion(request.emotion());
         entry.setImageKey(request.imageKey());
@@ -118,6 +141,9 @@ public class JournalService {
         personalizationService.recordFeedback(userId, "JOURNAL_CREATED", saved.getId(),
                 "journal", java.util.Map.of("type", request.type()));
 
+        // Advance any matching started journaling challenges (fire-and-forget)
+        challengeActivityService.onJournalCreated(userId, saved.getId(), null);
+
         return resolve(saved, userId);
     }
 
@@ -129,6 +155,9 @@ public class JournalService {
 
         List<JournalEntry> entries;
         long totalCount;
+        // True when a search hit the per-request scan ceiling, so the caller is
+        // told more may exist instead of being shown a silently wrong total.
+        boolean searchScanCapped = false;
 
         if (type != null && !type.isBlank()) {
             if (!VALID_TYPES.contains(type)) {
@@ -138,13 +167,35 @@ public class JournalService {
             entries = repository.findByUserIdAndTypeOrderByCreatedAtDesc(userId, type, pageable);
             totalCount = repository.countByUserIdAndType(userId, type);
         } else if (search != null && !search.isBlank()) {
-            String query = search.trim();
-            if (query.length() > 200) query = query.substring(0, 200);
-            // Pattern.quote wraps the query in \Q…\E for a safe literal regex match
-            query = java.util.regex.Pattern.quote(query);
-            entries = repository.searchByUserIdAndText(userId, query, pageable);
-            // Count for search results is the size of this page (approximate)
-            totalCount = entries.size();
+            String needle = search.trim().toLowerCase(Locale.ROOT);
+            if (needle.length() > 200) needle = needle.substring(0, 200);
+            // Content is encrypted at rest, so Mongo cannot regex it. Page
+            // through this user's own entries and filter after decryption;
+            // another user's rows are never read.
+            List<JournalEntry> matched = new ArrayList<>();
+            for (int offset = 0;; offset += SEARCH_PAGE_SIZE) {
+                if (offset >= MAX_SEARCH_SCAN) {
+                    searchScanCapped = true;
+                    break;
+                }
+                List<JournalEntry> chunk = repository.findByUserIdOrderByCreatedAtDesc(
+                        userId, PageRequest.of(offset / SEARCH_PAGE_SIZE, SEARCH_PAGE_SIZE));
+                if (chunk.isEmpty()) break;
+                for (JournalEntry candidate : chunk) {
+                    if (containsIgnoreCase(cipher.decrypt(candidate.getTitle()), needle)
+                            || containsIgnoreCase(cipher.decrypt(candidate.getContent()), needle)) {
+                        matched.add(candidate);
+                    }
+                }
+                if (chunk.size() < SEARCH_PAGE_SIZE) break;
+            }
+            totalCount = matched.size();
+            if (searchScanCapped) {
+                log.warn("journal_search_scan_capped userId={} limit={}", userId, MAX_SEARCH_SCAN);
+            }
+            int fromIndex = Math.min(safePage * safeSize, matched.size());
+            int toIndex = Math.min(fromIndex + safeSize, matched.size());
+            entries = matched.subList(fromIndex, toIndex);
         } else {
             entries = repository.findByUserIdOrderByCreatedAtDesc(userId, pageable);
             totalCount = repository.countByUserId(userId);
@@ -155,7 +206,7 @@ public class JournalService {
                 .toList();
 
         long endOffset = (long) (safePage + 1) * safeSize;
-        boolean hasMore = endOffset < totalCount;
+        boolean hasMore = endOffset < totalCount || searchScanCapped;
 
         return new JournalListResponse(responseList, totalCount, safePage, safeSize, hasMore);
     }
@@ -173,13 +224,13 @@ public class JournalService {
         boolean contentChanged = false;
 
         if (request.title() != null) {
-            entry.setTitle(request.title());
+            entry.setTitle(cipher.encrypt(request.title()));
         }
         if (request.content() != null) {
-            if (!request.content().equals(entry.getContent())) {
+            if (!request.content().equals(cipher.decrypt(entry.getContent()))) {
                 contentChanged = true;
             }
-            entry.setContent(request.content());
+            entry.setContent(cipher.encrypt(request.content()));
         }
         if (request.type() != null) {
             if (!VALID_TYPES.contains(request.type())) {
@@ -319,6 +370,19 @@ public class JournalService {
         return resolve(saved, userId);
     }
 
+    private static boolean containsIgnoreCase(String value, String needle) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    private void encryptAnalysis(JournalEntry.AiAnalysis ai) {
+        if (ai == null) {
+            return;
+        }
+        ai.setEmotionalThemes(cipher.encrypt(ai.getEmotionalThemes()));
+        ai.setSummary(cipher.encrypt(ai.getSummary()));
+        ai.setReflectionPrompt(cipher.encrypt(ai.getReflectionPrompt()));
+    }
+
     /**
      * Fire-and-forget AI analysis for journal content.
      * Sets status to PROCESSING, calls AI, persists result.
@@ -338,8 +402,8 @@ public class JournalService {
 
                 // Compute analysis text from the LATEST entry state (not the stale
                 // copy captured before the async dispatch)
-                String title = current.getTitle();
-                String content = current.getContent();
+                String title = cipher.decrypt(current.getTitle());
+                String content = cipher.decrypt(current.getContent());
                 String analysisText;
                 if (title != null && !title.isBlank()) {
                     analysisText = (content != null && !content.isBlank())
@@ -377,6 +441,9 @@ public class JournalService {
 
                 // Call AI service
                 JournalEntry.AiAnalysis result = aiClient.analyzeJournal(analysisText, current.getContentVersion());
+                // The analysis summary/themes/prompt can echo the entry text,
+                // so they are sealed with the same key before persistence.
+                encryptAnalysis(result);
 
                 // Re-fetch before saving to avoid losing the result on version conflict
                 JournalEntry latest = repository.findById(journalId).orElse(null);

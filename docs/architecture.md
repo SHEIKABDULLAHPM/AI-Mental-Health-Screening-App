@@ -29,7 +29,7 @@
                  ▼
            ┌──────────────────────────────┐
            │          AI Service          │   FastAPI
-           │  emotion · risk · RAG · rec  │
+           │   mood · risk · RAG · rec    │
            │  LLM (OpenAI-compatible)     │
            └──────────┬──────────────┬────┘
                       ▼              ▼
@@ -47,7 +47,7 @@
 2. `/api/v1/screenings` persists the result to MongoDB.
 3. Backend enqueues an AI job on RabbitMQ (`ai_tasks`) and/or calls the AI
    service (`/api/v1/...`) directly.
-4. AI service: risk assessment + emotion detection + RAG retrieval from Qdrant
+4. AI service: risk assessment + text mood analysis + RAG retrieval from Qdrant
    → LLM-grounded recommendations → response.
 5. Content heavy artifacts (reports/images) are stored via MinIO.
 
@@ -70,9 +70,9 @@ Example already present: `modules/screening/*`.
 ## AI service module map
 ```
 app/
-├── api/v1/endpoints/   # screening, emotion, risk, rag, recommendations
+├── api/v1/endpoints/   # screening, mood, journal, risk, rag, recommendations
 ├── core/               # engine abstractions + implementations
-│   ├── emotion/  risk/  rag/  recommendation/  llm/
+│   ├── mood/  risk/  rag/  recommendation/  llm/
 ├── services/           # orchestration (ai_router) + MQ consumer
 ├── schemas/            # pydantic request/response models
 └── config.py logging.py errors.py

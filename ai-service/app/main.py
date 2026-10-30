@@ -1,9 +1,12 @@
 """FastAPI application factory and lifespan wiring."""
 
+import hmac
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import api_router
 from app.config import settings
@@ -21,12 +24,52 @@ async def lifespan(app: FastAPI):
     _validate_startup_settings()
     if settings.rag_enabled:
         _validate_rag_collection()
+    if settings.emotion_enabled:
+        from app.core.mood.face_emotion import warmup_face_emotion_analyzer
+
+        if warmup_face_emotion_analyzer():
+            log.info("face_emotion_model_ready", version=settings.emotion_model_version)
+        else:
+            # Non-fatal: the /face endpoint returns 503 while every existing
+            # flow (on-device /camera, text, fusion) keeps working.
+            log.warning("face_emotion_model_unavailable_at_startup")
+    _warmup_text_analyzer()
     try:
         from app.services.mq_consumer import start_consumer
         start_consumer()  # background RabbitMQ worker
     except Exception:
         log.warning("consumer_will_retry", exc_info=True)
     yield
+
+
+def _text_analyzer_status() -> str:
+    """Report whether the text NLP models are warm or degraded to rules."""
+    try:
+        from app.core.mood.text_analyzer import get_text_analyzer
+
+        analyzer = get_text_analyzer()
+        if getattr(analyzer, "_emotion_pipeline", None) is None:
+            return "rule-based"
+        return "transformer"
+    except Exception:
+        return "unavailable"
+
+
+def _warmup_text_analyzer() -> None:
+    """Load the text emotion/sentiment models before serving traffic.
+
+    Without this the first /mood/analyze request paid the full transformer
+    load (~5 minutes on a cold cache), which always exceeded the backend's
+    30 s timeout and silently dropped the user's reflection text.
+    Non-fatal: the analyzer degrades to rule-based scoring on its own.
+    """
+    try:
+        from app.core.mood.text_analyzer import warmup_text_analyzer
+
+        engine = warmup_text_analyzer()
+        log.info("text_models_ready", engine=engine)
+    except Exception:
+        log.warning("text_models_unavailable_at_startup", exc_info=True)
 
 
 def _validate_startup_settings() -> None:
@@ -69,23 +112,65 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Synora AI Service",
         version="0.1.0",
-        description="Emotion, risk, RAG and recommendation endpoints for Synora.",
+        description="Mood, risk, RAG and recommendation endpoints for Synora.",
         lifespan=lifespan,
     )
 
     apply_cors(app)
+    apply_inbound_auth(app)
 
     app.include_router(api_router, prefix="/api/v1")
 
     @app.get("/health", tags=["ops"])
     async def health() -> dict:
+        emotion_status = "disabled"
+        if settings.emotion_enabled:
+            try:
+                from app.core.mood.face_emotion import get_face_emotion_analyzer
+
+                emotion_status = (
+                    "loaded"
+                    if get_face_emotion_analyzer().loaded
+                    else "unavailable"
+                )
+            except Exception:
+                emotion_status = "unavailable"
         return {
             "status": "ok",
             "app": settings.app_name,
             "environment": settings.app_env,
+            "emotion_model": emotion_status,
+            "text_analyzer": _text_analyzer_status(),
         }
 
     return app
+
+
+def apply_inbound_auth(app: FastAPI) -> None:
+    """Require the shared internal key on every /api/v1 route when enabled.
+
+    The AI service holds no user identity of its own: it is an internal
+    dependency of the Spring backend. Binding it to 127.0.0.1 only protects
+    development; in a container network any peer could otherwise invoke
+    analysis endpoints directly. /health stays unauthenticated so probes and
+    the compose healthcheck keep working.
+    """
+
+    class InboundKeyMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            if settings.inbound_auth_required and request.url.path.startswith(
+                "/api/v1"
+            ):
+                supplied = request.headers.get("X-Internal-Api-Key", "")
+                expected = settings.internal_api_key
+                if not expected or not hmac.compare_digest(supplied, expected):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid or missing internal API key."},
+                    )
+            return await call_next(request)
+
+    app.add_middleware(InboundKeyMiddleware)
 
 
 def apply_cors(app: FastAPI) -> None:

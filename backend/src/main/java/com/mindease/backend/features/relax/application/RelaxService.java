@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 import com.mindease.backend.common.error.ApiException;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.relax.domain.RelaxActivity;
 import com.mindease.backend.features.relax.domain.RelaxActivityRepository;
 import com.mindease.backend.features.relax.domain.UserRelaxCompletion;
@@ -20,11 +21,14 @@ public class RelaxService {
 
     private final RelaxActivityRepository activityRepository;
     private final UserRelaxCompletionRepository completionRepository;
+    private final ChallengeActivityService challengeActivityService;
 
     public RelaxService(RelaxActivityRepository activityRepository,
-                        UserRelaxCompletionRepository completionRepository) {
+                        UserRelaxCompletionRepository completionRepository,
+                        ChallengeActivityService challengeActivityService) {
         this.activityRepository = activityRepository;
         this.completionRepository = completionRepository;
+        this.challengeActivityService = challengeActivityService;
     }
 
     public List<RelaxActivityResponse> getActivities(String userId, Optional<String> category) {
@@ -64,7 +68,12 @@ public class RelaxService {
         completion.setActivityId(activityId);
         completion.setCompletedAt(Instant.now());
 
-        completionRepository.save(completion);
+        UserRelaxCompletion saved = completionRepository.save(completion);
+
+        // Advance any matching started relaxation challenges (fire-and-forget)
+        if (saved != null) {
+            challengeActivityService.onRelaxCompleted(userId, saved.getId(), null);
+        }
 
         return RelaxActivityResponse.from(activity, true);
     }

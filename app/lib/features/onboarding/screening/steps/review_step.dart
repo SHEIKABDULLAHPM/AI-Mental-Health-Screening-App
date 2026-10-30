@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
+import 'package:mindease/core/constants/moods.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/shared/widgets/app_section_card.dart';
 import 'package:mindease/features/onboarding/screening/data/questionnaires.dart';
 import 'package:mindease/features/onboarding/screening/screening_controller.dart';
 
-/// Step 7 — summary of all answers with per-section edit shortcuts.
+/// Step 8 — summary of all answers with per-section edit shortcuts.
 class ReviewStep extends StatelessWidget {
   const ReviewStep({super.key, required this.controller});
 
@@ -55,6 +56,45 @@ class ReviewStep extends StatelessWidget {
                 'Occupation',
                 c.personal.occupation.isEmpty ? '—' : c.personal.occupation,
               ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          _Section(
+            icon: Icons.mood_outlined,
+            title: 'Mood Check-In',
+            color: theme.colorScheme.tertiary,
+            onEdit: () =>
+                controller.jumpToStep(ScreeningController.moodIndex),
+            rows: [
+              (
+                'Current mood',
+                c.mood.currentMoodId != null
+                    ? moodById(c.mood.currentMoodId!).label
+                    : '—',
+              ),
+              (
+                'Emotion',
+                c.mood.emotion?.isNotEmpty == true ? c.mood.emotion! : '—',
+              ),
+              (
+                'Intensity',
+                c.mood.intensityTouched ? '${c.mood.intensity}/10' : '—',
+              ),
+              (
+                'Lately',
+                c.mood.frequency ?? '—',
+              ),
+              (
+                'Change',
+                c.mood.recentChange ?? '—',
+              ),
+              if (c.mood.reflection.trim().isNotEmpty)
+                (
+                  'Reflection',
+                  c.mood.reflection.trim().length > 60
+                      ? '${c.mood.reflection.trim().substring(0, 60)}…'
+                      : c.mood.reflection.trim(),
+                ),
             ],
           ),
           const SizedBox(height: AppSpacing.md),

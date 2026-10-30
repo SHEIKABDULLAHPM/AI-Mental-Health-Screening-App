@@ -5,7 +5,7 @@ screening with AI-driven, evidence-grounded support guidance.
 
 - **Mobile app:** Flutter (Android) — feature-based Clean Architecture
 - **Backend:** Spring Boot 3 (modular, `/api/v1` versioned)
-- **AI service:** Python/FastAPI (emotion, risk, RAG, recommendation, LLM)
+- **AI service:** Python/FastAPI (mood, risk, RAG, recommendation, LLM)
 - **Data:** MongoDB · Redis · RabbitMQ · Qdrant · MinIO
 - **Auth:** Keycloak (OIDC)
 
@@ -40,7 +40,8 @@ All services should report `healthy` (every container ships a health check).
 Spot-check the API:
 
 ```bash
-curl http://localhost:8080/actuator/health          # backend + infra health
+curl http://localhost:8080/actua
+tor/health          # backend + infra health
 curl http://localhost:8000/api/v1/risk/assess \     # AI service (dev-only, 127.0.0.1)
   -H 'Content-Type: application/json' \
   -d '{"screening_score":{"phq9":20},"contextual_flags":["hopeless"]}'
@@ -117,5 +118,6 @@ docker compose logs -f backend ai-service
 
 ## Documentation
 
+- See [docs/project-documentation.md](docs/project-documentation.md) for the comprehensive requirements, architecture, workflows, API, data model, AI, security, deployment, and testing reference.
 - See [docs/architecture.md](docs/architecture.md) for the full architecture,
   data flow and extension guide.

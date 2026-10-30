@@ -67,6 +67,17 @@ public class MoodController {
         return ResponseEntity.ok(ApiResponse.ok(service.getRecentMoods(userId, limit)));
     }
 
+    /**
+     * Combined onboarding mood context (recent + trend + statistics) in one
+     * round-trip so onboarding prefill needs a single HTTP call. Reuses the
+     * exact same service calculations as the standalone endpoints.
+     */
+    @GetMapping("/onboarding-summary")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> onboardingSummary() {
+        String userId = AuthenticatedUser.currentId();
+        return ResponseEntity.ok(ApiResponse.ok(service.getOnboardingMoodSummary(userId)));
+    }
+
     @GetMapping("/stats")
     public ResponseEntity<ApiResponse<MoodStatisticsResponse>> statistics() {
         String userId = AuthenticatedUser.currentId();

@@ -204,6 +204,16 @@ class _LoginScreenState extends State<LoginScreen> {
                       text: 'Create Account',
                       onPressed: () => context.go('/register'),
                     ),
+                    const SizedBox(height: AppSpacing.sm),
+                    // The build default is the emulator-only 10.0.2.2 address.
+                    // A physical phone must be able to correct the backend
+                    // address before it can sign in, otherwise the network
+                    // error leaves the user with no way forward.
+                    TextButton.icon(
+                      onPressed: () => context.push('/settings'),
+                      icon: const Icon(Icons.dns_outlined, size: 18),
+                      label: const Text('Server settings'),
+                    ),
                   ],
                 ),
               ),

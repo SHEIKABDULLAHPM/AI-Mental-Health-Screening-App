@@ -20,11 +20,13 @@ class Mood {
   /// 1 (most negative) to 6 (most positive) for trend math.
   final int value;
 
-  bool get isPositive => value >= 5;
+  bool get isPositive => value >= 4;
   bool get isNegative => value <= 2;
 }
 
 /// The six moods of the core mood scale (id order matters: left = positive).
+/// Values match the backend `moodToValue` (MoodService/MoodTrendAnalyzer):
+/// very_happy=6, happy=5, calm=4, okay=3, low=2, stressed=1.
 const List<Mood> kMoods = [
   Mood(
     id: 'very_happy',
@@ -45,14 +47,14 @@ const List<Mood> kMoods = [
     label: 'Calm',
     icon: Icons.self_improvement_rounded,
     color: AppColors.primary,
-    value: 5,
+    value: 4,
   ),
   Mood(
     id: 'okay',
     label: 'Okay',
     icon: Icons.sentiment_neutral_rounded,
     color: AppColors.warning,
-    value: 4,
+    value: 3,
   ),
   Mood(
     id: 'low',

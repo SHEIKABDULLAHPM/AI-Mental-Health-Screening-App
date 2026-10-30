@@ -17,9 +17,16 @@ pypdf==5.1.0
 # NLP mood analysis (pretrained models)
 transformers>=4.44.0,<5
 
-# Messaging / cache
+# Server-side facial emotion inference (vit_fer_fp16.tflite).
+# Lightweight LiteRT runtime only — no TensorFlow/PyTorch needed.
+ai-edge-litert>=1.2.0
+pillow>=10.0.0
+numpy>=1.26.0
+# Multipart/form-data parsing for the face-crop emotion upload endpoint
+python-multipart>=0.0.9
+
+# Messaging
 pika==1.3.2
-redis==5.1.1
 
 # Observability
 structlog==24.4.0

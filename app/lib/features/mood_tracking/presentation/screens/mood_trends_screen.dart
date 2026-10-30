@@ -53,7 +53,20 @@ class _MoodTrendsScreenState extends State<MoodTrendsScreen> {
       title: 'Mood Trends',
       body: loading
           ? const LoadingView()
-          : FeatureBody(
+          : controller.error != null && entries.isEmpty
+              ? EmptyStateView(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load trends',
+                  message: 'Check your connection and try again.',
+                  actionLabel: 'Retry',
+                  onAction: () {
+                    final c = context.read<MoodController>();
+                    c.loadEntries();
+                    c.loadEnhancedTrends(days: 30);
+                    c.loadStatistics();
+                  },
+                )
+              : FeatureBody(
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -225,12 +238,17 @@ class _MoodChartCard extends StatelessWidget {
   }
 
   static List<TrendDatum> _monthData(List<MoodEntry> entries) {
-    final now = DateTime.now();
+    final today = DateTime.now();
+    final todayStart = DateTime(today.year, today.month, today.day);
     return List.generate(4, (i) {
-      final start = DateTime(now.year, now.month, now.day - (3 - i) * 7);
-      final end = start.add(const Duration(days: 6));
+      // Contiguous 7-day buckets ending today: W1 oldest … W4 current.
+      // end is exclusive to avoid double-counting boundary midnights.
+      final end = todayStart.add(Duration(days: -((3 - i) * 7) + 1));
+      final start = end.subtract(const Duration(days: 7));
       final window = entries
-          .where((e) => !e.date.isBefore(start) && !e.date.isAfter(end))
+          .where(
+            (e) => !e.date.isBefore(start) && e.date.isBefore(end),
+          )
           .toList();
       final avg = window.isEmpty
           ? 0.0
@@ -303,14 +321,15 @@ class _IntensityTrendCard extends StatelessWidget {
   }
 
   static List<TrendDatum> _monthIntensity(List<MoodEntry> entries) {
-    final now = DateTime.now();
+    final today = DateTime.now();
+    final todayStart = DateTime(today.year, today.month, today.day);
     return List.generate(4, (i) {
-      final start = DateTime(now.year, now.month, now.day - (3 - i) * 7);
-      final end = start.add(const Duration(days: 6));
+      final end = todayStart.add(Duration(days: -((3 - i) * 7) + 1));
+      final start = end.subtract(const Duration(days: 7));
       final window = entries
           .where((e) =>
               !e.date.isBefore(start) &&
-              !e.date.isAfter(end) &&
+              e.date.isBefore(end) &&
               e.intensity != null,)
           .toList();
       final avg = window.isEmpty

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:mindease/core/config/app_config.dart';
+import 'package:mindease/core/config/server_endpoint.dart';
 
 /// Thin wrapper around Dio giving a single configured HTTP client with
 /// automatic token refresh on 401 responses.
@@ -17,7 +18,7 @@ class DioClient {
       : _secureStorage = secureStorage ?? const FlutterSecureStorage() {
     _dio = Dio(
       BaseOptions(
-        baseUrl: AppConfig.apiBaseUrl,
+        baseUrl: ServerEndpoint.current,
         connectTimeout: AppConfig.connectTimeout,
         receiveTimeout: AppConfig.receiveTimeout,
         contentType: Headers.jsonContentType,
@@ -39,10 +40,22 @@ class DioClient {
 
   Dio get dio => _dio;
 
+  /// Points every later request at [baseUrl]. Used when the user changes the
+  /// server address for this device, so the change applies immediately instead
+  /// of only after a restart.
+  void setBaseUrl(String baseUrl) {
+    if (baseUrl.isEmpty) return;
+    _dio.options.baseUrl = baseUrl;
+  }
+
   Future<void> _onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    // Resolve the address at request time, so an address changed in Settings
+    // applies to the very next request without restarting the app.
+    options.baseUrl = ServerEndpoint.current;
+
     // Skip attaching tokens to the refresh endpoint itself to avoid loops.
     if (options.path == '/auth/refresh') {
       handler.next(options);
@@ -52,6 +65,11 @@ class DioClient {
     if (token != null && token.isNotEmpty) {
       options.headers['Authorization'] = 'Bearer $token';
     }
+    final offset = DateTime.now().timeZoneOffset;
+    final h = offset.inHours;
+    final m = offset.inMinutes.remainder(60).abs();
+    options.headers['X-User-Timezone'] =
+        'UTC${h >= 0 ? '+' : '-'}${h.abs().toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
     handler.next(options);
   }
 
@@ -94,8 +112,17 @@ class DioClient {
       if (refreshToken == null || refreshToken.isEmpty) return false;
 
       // Use a bare Dio instance without interceptors to avoid recursion.
-      final response = await Dio().post<Map<String, dynamic>>(
-        '${AppConfig.apiBaseUrl}/auth/refresh',
+      // Timeouts match the main client: an unbounded refresh call could
+      // otherwise stall app startup (e.g. splash session check) far beyond
+      // the normal connect/receive budgets when the network drops packets.
+      final refresher = Dio(
+        BaseOptions(
+          connectTimeout: AppConfig.connectTimeout,
+          receiveTimeout: AppConfig.receiveTimeout,
+        ),
+      );
+      final response = await refresher.post<Map<String, dynamic>>(
+        '${ServerEndpoint.current}/auth/refresh',
         data: {'refreshToken': refreshToken},
       );
 

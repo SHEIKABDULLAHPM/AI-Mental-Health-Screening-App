@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -22,6 +23,7 @@ class JournalController extends ChangeNotifier {
   bool _hasMore = true;
   int _currentPage = 0;
   static const int _pageSize = 20;
+  bool _disposed = false;
 
   // Search & filter state
   String _searchQuery = '';
@@ -40,7 +42,22 @@ class JournalController extends ChangeNotifier {
   void _start() {
     _loading = true;
     _error = null;
-    notifyListeners();
+    // `_start()` runs synchronously from loaders that screens call straight
+    // out of `initState`. Notifying here would mark the provider scope while
+    // the framework is still building that screen, which it rejects with
+    // "setState() or markNeedsBuild() called during build". `_loading` is
+    // already set, so the current build reads the right state; the deferred
+    // notification just schedules the follow-up rebuild safely.
+    if (_disposed) return;
+    scheduleMicrotask(() {
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   void _fail(Object e) {

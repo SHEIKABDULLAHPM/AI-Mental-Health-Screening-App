@@ -14,6 +14,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AnalyzeMoodResponse(
         @JsonProperty("fused_mood") String fusedMood,
+        @JsonProperty("ai_suggested_mood") String aiSuggestedMood,
         @JsonProperty("fused_emotion") String fusedEmotion,
         @JsonProperty("confidence") Double confidence,
         @JsonProperty("sources_used") List<String> sourcesUsed,

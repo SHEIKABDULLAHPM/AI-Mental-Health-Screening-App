@@ -1,6 +1,7 @@
 package com.mindease.backend.features.journal.dto;
 
 import java.time.Instant;
+import java.util.function.UnaryOperator;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.mindease.backend.features.journal.domain.JournalEntry;
@@ -49,16 +50,28 @@ public record JournalResponse(
             Instant analyzedAt) {
 
         public static AiAnalysisDto from(JournalEntry.AiAnalysis ai) {
+            return from(ai, UnaryOperator.identity());
+        }
+
+        /**
+         * Builds the DTO with a decryptor applied to every content-derived
+         * field. Emotion/sentiment labels are not encrypted (they are short
+         * categorical values); the summary, themes and prompt can echo the
+         * entry so they are sealed at rest too.
+         */
+        public static AiAnalysisDto from(JournalEntry.AiAnalysis ai,
+                                         UnaryOperator<String> decrypt) {
             if (ai == null) return null;
+            UnaryOperator<String> d = decrypt == null ? UnaryOperator.identity() : decrypt;
             return new AiAnalysisDto(
                     ai.getStatus(),
                     ai.getEmotion(),
                     ai.getEmotionConfidence(),
                     ai.getSentiment(),
                     ai.getSentimentConfidence(),
-                    ai.getEmotionalThemes(),
-                    ai.getSummary(),
-                    ai.getReflectionPrompt(),
+                    d.apply(ai.getEmotionalThemes()),
+                    d.apply(ai.getSummary()),
+                    d.apply(ai.getReflectionPrompt()),
                     ai.getAnalysisVersion(),
                     ai.getAnalyzedContentVersion(),
                     ai.getAnalyzedAt());
@@ -66,10 +79,17 @@ public record JournalResponse(
     }
 
     public static JournalResponse from(JournalEntry entry, String imageUrl, String audioUrl, String videoUrl) {
+        return from(entry, imageUrl, audioUrl, videoUrl, UnaryOperator.identity());
+    }
+
+    /** Variant that decrypts content-derived fields for presentation. */
+    public static JournalResponse from(JournalEntry entry, String imageUrl, String audioUrl,
+                                       String videoUrl, UnaryOperator<String> decrypt) {
+        UnaryOperator<String> d = decrypt == null ? UnaryOperator.identity() : decrypt;
         return new JournalResponse(
                 entry.getId(),
-                entry.getTitle(),
-                entry.getContent(),
+                d.apply(entry.getTitle()),
+                d.apply(entry.getContent()),
                 entry.getType(),
                 entry.getEmotion(),
                 entry.getImageKey(),
@@ -86,7 +106,7 @@ public record JournalResponse(
                 entry.getVideoSize(),
                 entry.getVideoDurationSeconds(),
                 videoUrl,
-                AiAnalysisDto.from(entry.getAiAnalysis()),
+                AiAnalysisDto.from(entry.getAiAnalysis(), d),
                 entry.getContentVersion(),
                 entry.getCreatedAt(),
                 entry.getUpdatedAt());

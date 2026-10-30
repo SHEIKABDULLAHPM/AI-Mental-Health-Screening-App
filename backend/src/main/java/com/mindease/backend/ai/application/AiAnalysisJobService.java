@@ -21,6 +21,9 @@ import com.mindease.backend.ai.dto.AiAnalysisResultRequest;
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
 import com.mindease.backend.config.AppProperties;
+import com.mindease.backend.screening.domain.Screening;
+import com.mindease.backend.screening.domain.ScreeningRepository;
+import com.mindease.backend.wellness.application.WellnessAnalysisService;
 import com.mindease.backend.wellness.application.WellnessProfileService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -65,6 +68,8 @@ public class AiAnalysisJobService {
     private final AppProperties props;
     private final ObjectMapper objectMapper;
     private final WellnessProfileService profiles;
+    private final ScreeningRepository screenings;
+    private final WellnessAnalysisService analysis;
 
     // Metrics
     private final Counter jobsCreated;
@@ -82,6 +87,8 @@ public class AiAnalysisJobService {
                                 AppProperties props,
                                 ObjectMapper objectMapper,
                                 WellnessProfileService profiles,
+                                ScreeningRepository screenings,
+                                WellnessAnalysisService analysis,
                                 MeterRegistry meterRegistry) {
         this.jobs = jobs;
         this.rabbit = rabbit;
@@ -89,6 +96,8 @@ public class AiAnalysisJobService {
         this.props = props;
         this.objectMapper = objectMapper;
         this.profiles = profiles;
+        this.screenings = screenings;
+        this.analysis = analysis;
 
         this.jobsCreated = Counter.builder("ai.jobs.created")
                 .description("Number of AI analysis jobs created")
@@ -290,6 +299,22 @@ public class AiAnalysisJobService {
         if (scores == null) {
             return;
         }
+        com.mindease.backend.wellness.application.WellnessAnalysisService.MoodSummary mood = null;
+        if (scores.getOnboardingMood() != null && !scores.getOnboardingMood().isBlank()) {
+            mood = new com.mindease.backend.wellness.application.WellnessAnalysisService.MoodSummary(
+                    scores.getOnboardingMood(),
+                    scores.getOnboardingMoodEmotion(),
+                    scores.getOnboardingMoodIntensity(),
+                    scores.getOnboardingMoodScore(),
+                    scores.getMoodTrendDirection() != null ? scores.getMoodTrendDirection() : "unknown",
+                    scores.getMoodTrendDescription() != null ? scores.getMoodTrendDescription()
+                            : "Not enough mood records to determine a trend.",
+                    scores.getMoodHistoryCount() != null ? scores.getMoodHistoryCount() : 0,
+                    scores.getCameraEmotion(),
+                    scores.getCameraConfidence(),
+                    scores.getCameraModelVersion(),
+                    scores.getSignalAgreement() != null ? scores.getSignalAgreement() : "noSignal");
+        }
         profiles.completeFromJob(
                 job.getUserId(),
                 job.getAssessmentId(),
@@ -298,7 +323,8 @@ public class AiAnalysisJobService {
                 scores.getLifestyleScore() == null ? 0 : scores.getLifestyleScore(),
                 scores.getSleepQuality(),
                 scores.getPrimaryFocus(),
-                job.getAiInsight());
+                job.getAiInsight(),
+                mood);
     }
 
     /**
@@ -319,6 +345,28 @@ public class AiAnalysisJobService {
             throw new ApiException(ErrorCode.CONFLICT,
                     "Job is not currently being processed.");
         }
+        job = markFailed(job, error);
+        finalizeDeterministicFallback(job);
+        return job;
+    }
+
+    /**
+     * Marks a wedged job FAILED on behalf of the stale-job sweeper. Unlike
+     * {@link #fail(String, String)} this also accepts QUEUED jobs, because the
+     * sweeper only reaches a QUEUED job once its publish/claim window elapsed.
+     */
+    public AiAnalysisJob expire(String jobId, String error) {
+        AiAnalysisJob job = requireInternal(jobId);
+        if (job.getStatus() == AiJobStatus.COMPLETED) {
+            return job;
+        }
+        job = markFailed(job, error);
+        finalizeDeterministicFallback(job);
+        log.warn("ai_job_stale_failed jobId={}", jobId);
+        return job;
+    }
+
+    private AiAnalysisJob markFailed(AiAnalysisJob job, String error) {
         job.setStatus(AiJobStatus.FAILED);
         job.setErrorMessage(error == null || error.isBlank()
                 ? "The analysis could not be completed."
@@ -330,6 +378,32 @@ public class AiAnalysisJobService {
             processingDuration.record(durationMs, MILLISECONDS);
         }
         return jobs.save(job);
+    }
+
+    /**
+     * A terminal AI failure must never strand the user on an "AI pending"
+     * profile: the deterministic score and narrative are already a pure
+     * function of the stored answers. Publish them so the dashboard stays
+     * usable; a later successful retry overwrites the narrative with the
+     * AI-generated one through {@link #complete(String, AiAnalysisResultRequest)}.
+     */
+    private void finalizeDeterministicFallback(AiAnalysisJob job) {
+        if (job.getAssessmentId() == null || job.getUserId() == null) {
+            return;
+        }
+        try {
+            screenings.findById(job.getAssessmentId())
+                    .filter(screening -> job.getUserId().equals(screening.getUserId()))
+                    .ifPresent(screening -> {
+                        WellnessAnalysisService.Analysis fallback = analysis.analyze(screening);
+                        profiles.completeFor(job.getUserId(), job.getAssessmentId(), fallback);
+                        log.info("ai_job_deterministic_fallback jobId={} assessmentId={}",
+                                job.getId(), job.getAssessmentId());
+                    });
+        } catch (Exception e) {
+            // Never let fallback bookkeeping mask the original job failure.
+            log.warn("ai_job_fallback_failed jobId={} error={}", job.getId(), e.getMessage());
+        }
     }
 
     /** Publishes the job id to the AI task queue. Returns false on failure. */

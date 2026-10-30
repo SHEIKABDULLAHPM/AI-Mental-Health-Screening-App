@@ -9,6 +9,8 @@ import com.mindease.backend.common.api.ApiResponse;
 import com.mindease.backend.security.AuthenticatedUser;
 import com.mindease.backend.wellness.application.WellnessProfileService;
 import com.mindease.backend.wellness.dto.WellnessProfileDto;
+import com.mindease.backend.wellness.application.MentalWellnessAnalysisService;
+import org.springframework.web.bind.annotation.PostMapping;
 
 @RestController
 @RequestMapping("/api/v1/wellness-profile")

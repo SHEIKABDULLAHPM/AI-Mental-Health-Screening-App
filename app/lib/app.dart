@@ -10,6 +10,8 @@ import 'package:mindease/features/future_letters/presentation/state/future_lette
 import 'package:mindease/features/habits/presentation/state/habit_controller.dart';
 import 'package:mindease/features/journal/presentation/state/journal_controller.dart';
 import 'package:mindease/features/mood_tracking/presentation/state/mood_controller.dart';
+import 'package:mindease/features/physical_wellness/presentation/state/lifestyle_wellness_controller.dart';
+import 'package:mindease/features/physical_wellness/presentation/state/physical_wellness_controller.dart';
 import 'package:mindease/features/recommendations/presentation/state/recommendation_controller.dart';
 import 'package:mindease/features/dashboard/presentation/state/progress_controller.dart';
 import 'package:mindease/features/relax/presentation/state/relax_controller.dart';
@@ -31,6 +33,19 @@ class SynoraApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => FutureLetterController(featureApi)),
         ChangeNotifierProvider(create: (_) => RelaxController(featureApi)),
         ChangeNotifierProvider(create: (_) => ProgressController(featureApi)),
+        ChangeNotifierProvider(
+          create: (_) => PhysicalWellnessController(
+            featureApi,
+            gateway: wearableGateway,
+            cache: physicalLocalCache,
+          ),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => LifestyleWellnessController(
+            featureApi,
+            cache: physicalLocalCache,
+          ),
+        ),
       ],
       child: MaterialApp.router(
         title: 'SYNORA',

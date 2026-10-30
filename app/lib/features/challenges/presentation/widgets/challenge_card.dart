@@ -4,7 +4,8 @@ import 'package:mindease/core/theme/app_spacing.dart';
 import 'package:mindease/features/challenges/data/challenge.dart';
 import 'package:mindease/shared/widgets/app_progress_bar.dart';
 
-/// Card for one challenge in the challenges list.
+/// Card for one challenge in the challenges list. Driven by server status and
+/// progress; never by locally forged day counters.
 class ChallengeCard extends StatelessWidget {
   const ChallengeCard({
     super.key,
@@ -15,10 +16,31 @@ class ChallengeCard extends StatelessWidget {
   final Challenge challenge;
   final VoidCallback? onTap;
 
+  String get _frequencyLabel => switch (challenge.frequency) {
+        'DAILY' => 'Daily',
+        'WEEKLY' => 'Weekly',
+        _ => 'Regular',
+      };
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final completed = challenge.isCompleted;
+    final expired = challenge.isExpired;
+
+    final Color accent;
+    final IconData icon;
+    if (completed) {
+      accent = theme.colorScheme.tertiary;
+      icon = Icons.emoji_events_rounded;
+    } else if (expired) {
+      accent = theme.colorScheme.onSurfaceVariant;
+      icon = Icons.timer_off_rounded;
+    } else {
+      accent = theme.colorScheme.primary;
+      icon = Icons.flag_rounded;
+    }
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -31,20 +53,10 @@ class ChallengeCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: completed
-                      ? theme.colorScheme.tertiaryContainer
-                      : theme.colorScheme.primaryContainer,
+                  color: accent.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
                 ),
-                child: Icon(
-                  completed
-                      ? Icons.emoji_events_rounded
-                      : Icons.flag_rounded,
-                  color: completed
-                      ? theme.colorScheme.onTertiaryContainer
-                      : theme.colorScheme.primary,
-                  size: 22,
-                ),
+                child: Icon(icon, color: accent, size: 22),
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
@@ -59,30 +71,76 @@ class ChallengeCard extends StatelessWidget {
                             style: theme.textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.w700,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         StatusBadge(
-                          label: completed ? 'Done' : '${challenge.durationDays} days',
-                          color: completed
-                              ? theme.colorScheme.tertiary
-                              : theme.colorScheme.primary,
+                          label: completed
+                              ? 'Done'
+                              : expired
+                                  ? 'Expired'
+                                  : '$_frequencyLabel · ${challenge.points} pts',
+                          color: accent,
                         ),
                       ],
                     ),
-                    const SizedBox(height: 6),
-                    if (!completed)
-                      AppProgressBar(
-                        value: challenge.progress,
-                        label:
-                            'Day ${challenge.currentDay} of ${challenge.durationDays}',
-                      )
-                    else
+                    const SizedBox(height: 4),
+                    // Category + difficulty row
+                    Row(
+                      children: [
+                        if (challenge.category != null) ...[
+                          Icon(Icons.category_rounded, size: 12, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 3),
+                          Text(
+                            challenge.category!,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                        ],
+                        if (challenge.difficulty != null) ...[
+                          Icon(Icons.signal_cellular_alt_rounded, size: 12, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 3),
+                          Text(
+                            challenge.difficulty!,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                        ],
+                        if (challenge.estimatedDuration != null) ...[
+                          Icon(Icons.schedule_rounded, size: 12, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 3),
+                          Text(
+                            challenge.estimatedDuration!,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    if (completed || expired)
                       Text(
-                        'Completed · ${challenge.points} pts',
+                        completed
+                            ? 'Completed · ${challenge.points} pts'
+                            : 'This challenge is no longer available.',
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.tertiary,
+                          color: accent,
                           fontWeight: FontWeight.w600,
                         ),
+                      )
+                    else
+                      AppProgressBar(
+                        value: challenge.progressFraction,
+                        valueText: '${challenge.progress}/${challenge.target}',
+                        label: challenge.streak > 0
+                            ? '${challenge.streak}-day streak · ${challenge.percentage}%'
+                            : '${challenge.percentage}% complete',
                       ),
                   ],
                 ),

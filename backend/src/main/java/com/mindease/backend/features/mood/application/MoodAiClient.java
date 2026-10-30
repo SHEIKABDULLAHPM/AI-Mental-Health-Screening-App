@@ -64,6 +64,13 @@ public class MoodAiClient {
                 cameraMap.put("valence", cam.valence() != null ? cam.valence() : 0.0);
                 cameraMap.put("arousal", cam.arousal() != null ? cam.arousal() : 0.0);
                 cameraMap.put("frames_analyzed", cam.framesAnalyzed() != null ? cam.framesAnalyzed() : 1);
+                cameraMap.put("status", cam.status() != null ? cam.status() : "PREDICTED");
+                if (cam.calibratedConfidence() != null) {
+                    cameraMap.put("calibrated_confidence", cam.calibratedConfidence());
+                }
+                cameraMap.put("model_version",
+                        cam.modelVersion() != null && !cam.modelVersion().isBlank()
+                                ? cam.modelVersion() : "unknown");
                 body.put("camera_observation", cameraMap);
             }
 
@@ -84,6 +91,7 @@ public class MoodAiClient {
         // Fallback: manual-only result with default guidance
         return new AnalyzeMoodResponse(
                 request.mood(),
+                null,
                 request.emotion() != null ? request.emotion() : "neutral",
                 0.0,
                 List.of("MANUAL"),

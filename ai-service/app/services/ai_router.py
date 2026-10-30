@@ -7,7 +7,6 @@ import asyncio
 from typing import Any
 
 from app.config import settings
-from app.core.emotion import EmotionEngine, RuleBasedEmotionEngine
 from app.core.llm.client import LLMClient, build_llm_client
 from app.core.prompts import build_screening_prompt
 from app.core.rag import QdrantVectorStore
@@ -32,7 +31,6 @@ _INSIGHT_SCHEMA = {
 class AIRouter:
     def __init__(self) -> None:
         self.llm: LLMClient = build_llm_client()
-        self.emotion: EmotionEngine = RuleBasedEmotionEngine()
         self.risk: RiskAssessor = HeuristicRiskAssessor()
         self.recommender: Recommender = FallbackRecommender()
         self.rag = None

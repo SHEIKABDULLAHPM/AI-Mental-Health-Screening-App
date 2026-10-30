@@ -57,10 +57,16 @@ class TextAnalyzer(abc.ABC):
 
 
 class _TransformerAnalyzer(TextAnalyzer):
-    """Lazy-loading Hugging Face transformer analyzer.
+    """Hugging Face transformer analyzer.
 
-    Models are loaded once on first use and reused across calls.
-    Thread-safe via a lock.
+    Pipelines are loaded once — during startup warm-up (see
+    ``warmup_text_analyzer``) or, at the latest, on the first call — and then
+    reused across calls. Thread-safe via a lock.
+
+    The request path never reaches the network: ``analyze`` only ever resolves
+    pipelines that already exist in the local Hugging Face cache
+    (``local_files_only=True``). If they are missing, the call degrades to the
+    rule-based analyzer instead of blocking for minutes on a model download.
     """
 
     def __init__(self) -> None:
@@ -68,7 +74,7 @@ class _TransformerAnalyzer(TextAnalyzer):
         self._emotion_pipeline: Any = None
         self._sentiment_pipeline: Any = None
 
-    def _ensure_models(self) -> None:
+    def _ensure_models(self, *, allow_download: bool = False) -> None:
         if self._emotion_pipeline is not None:
             return
         with self._lock:
@@ -77,19 +83,23 @@ class _TransformerAnalyzer(TextAnalyzer):
             try:
                 from transformers import pipeline as hf_pipeline  # type: ignore[import-untyped]
 
-                log.info("loading_emotion_model", model=EMOTION_MODEL)
+                load_kwargs: dict[str, Any] = {} if allow_download else {"local_files_only": True}
+
+                log.info("loading_emotion_model", model=EMOTION_MODEL, allow_download=allow_download)
                 self._emotion_pipeline = hf_pipeline(
                     "text-classification",
                     model=EMOTION_MODEL,
                     top_k=None,
                     truncation=True,
+                    **load_kwargs,
                 )
-                log.info("loading_sentiment_model", model=SENTIMENT_MODEL)
+                log.info("loading_sentiment_model", model=SENTIMENT_MODEL, allow_download=allow_download)
                 self._sentiment_pipeline = hf_pipeline(
                     "text-classification",
                     model=SENTIMENT_MODEL,
                     top_k=None,
                     truncation=True,
+                    **load_kwargs,
                 )
                 log.info("mood_models_loaded")
             except Exception:
@@ -99,7 +109,15 @@ class _TransformerAnalyzer(TextAnalyzer):
                 raise
 
     def analyze(self, text: str) -> dict[str, Any]:
-        self._ensure_models()
+        if self._emotion_pipeline is None or self._sentiment_pipeline is None:
+            # Warm-up did not happen (or the cache is missing). Resolve from
+            # the local cache only — never download inside a request — and
+            # fall back to rules if that fails.
+            try:
+                self._ensure_models(allow_download=False)
+            except Exception:
+                log.warning("text_models_unavailable_using_rules")
+                return _FallbackAnalyzer().analyze(text)
 
         result: dict[str, Any] = {
             "source": "TEXT",
@@ -209,8 +227,8 @@ def build_text_analyzer() -> TextAnalyzer:
     """Factory: prefer transformers, fall back to rules."""
     try:
         analyzer = _TransformerAnalyzer()
-        # Try loading to verify availability
-        analyzer._ensure_models()
+        # Resolve now (startup warm-up) so no user request ever pays for it.
+        analyzer._ensure_models(allow_download=True)
         log.info("text_analyzer_initialized", engine="transformer")
         return analyzer
     except Exception:
@@ -230,3 +248,16 @@ def get_text_analyzer() -> TextAnalyzer:
             if _text_analyzer is None:
                 _text_analyzer = build_text_analyzer()
     return _text_analyzer
+
+
+def warmup_text_analyzer() -> str:
+    """Load the text models during startup so the first /mood/analyze is fast.
+
+    Returns the active engine name ("transformer" or "rule-based"). Called from
+    the FastAPI lifespan. Downloads happen here if the image cache is cold,
+    which keeps them off the request path where they blew past client timeouts.
+    """
+    analyzer = get_text_analyzer()
+    engine = "rule-based" if isinstance(analyzer, _FallbackAnalyzer) else "transformer"
+    log.info("text_analyzer_ready", engine=engine)
+    return engine

@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from app.core.mood.fusion import MultimodalFusionEngine
-from app.core.mood.text_analyzer import _FallbackAnalyzer
+from app.core.mood.text_analyzer import (
+    _FallbackAnalyzer,
+    _TransformerAnalyzer,
+    warmup_text_analyzer,
+)
 
 
 # ── Text Analyzer (Fallback) ──────────────────────────────────────────
@@ -57,6 +61,65 @@ class TestFallbackAnalyzer:
     def test_model_version(self):
         result = self.analyzer.analyze("test")
         assert result["model_version"] == "rule-based-v1"
+
+
+# ── Text Analyzer (lazy/cold-start behaviour) ──────────────────────────
+
+class TestTextAnalyzerColdStart:
+    """The request path must never download models or block for minutes.
+
+    Regression: the first /mood/analyze request loaded two ~500 MB
+    transformers on demand and took >4 minutes, far past the backend's 30 s
+    timeout, so the user's reflection text was silently dropped.
+    """
+
+    def test_request_path_never_downloads(self, monkeypatch):
+        analyzer = _TransformerAnalyzer()
+        calls = []
+
+        def _boom(*args, **kwargs):
+            calls.append(kwargs)
+            raise AssertionError("request path attempted a model download")
+
+        # Fail any load that would reach the network.
+        monkeypatch.setattr(
+            analyzer,
+            "_ensure_models",
+            lambda **kwargs: _boom(**kwargs),
+        )
+        result = analyzer.analyze("I feel happy and grateful today")
+        assert result["source"] == "TEXT"
+        # local_files_only must be requested on the request path.
+        assert calls and calls[0].get("allow_download") is False
+
+    def test_missing_models_degrade_to_rule_based(self, monkeypatch):
+        analyzer = _TransformerAnalyzer()
+
+        def _fail(**_kwargs):
+            raise OSError("model cache missing")
+
+        monkeypatch.setattr(analyzer, "_ensure_models", _fail)
+        result = analyzer.analyze("I feel sad and stressed and lonely")
+        assert result["model_version"] == "rule-based-v1"
+        assert result["sentiment"] == "negative"
+
+    def test_startup_warmup_allows_download(self):
+        # Warm-up is the only place a download is acceptable.
+        analyzer = _TransformerAnalyzer()
+        seen = {}
+
+        def _record(**kwargs):
+            seen.update(kwargs)
+            raise RuntimeError("stop here, we only inspect the kwargs")
+
+        analyzer._ensure_models = _record  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError):
+            analyzer._ensure_models(allow_download=True)
+        assert seen.get("allow_download") is True
+
+    def test_warmup_returns_engine_name(self):
+        engine = warmup_text_analyzer()
+        assert engine in ("transformer", "rule-based")
 
 
 # ── Fusion Engine ─────────────────────────────────────────────────────
@@ -244,6 +307,105 @@ class TestMultimodalFusionEngine:
             camera_analysis=camera,
         )
         assert result["sources_used"] == ["MANUAL", "CAMERA"]
+
+    # ── Manual mood authority (regression) ──────────────────────────────
+
+    def test_manual_mood_is_never_overridden_by_camera(self):
+        # Regression: manual "calm" (valence +0.3) blended 50/50 with a
+        # confident camera "sad" (valence -1.0) previously resolved to "okay",
+        # silently replacing what the user actually reported.
+        camera = {
+            "emotion": "sad",
+            "confidence": 0.8,
+            "valence": -1.0,
+            "suggested_mood": "stressed",
+        }
+        result = self.engine.fuse(
+            manual_mood="calm",
+            camera_analysis=camera,
+        )
+        assert result["fused_mood"] == "calm"
+        assert result["manual_mood"] == "calm"
+
+    def test_manual_mood_is_never_overridden_by_text(self):
+        text = {
+            "emotion": "grief",
+            "emotion_confidence": 0.95,
+            "sentiment": "negative",
+        }
+        result = self.engine.fuse(
+            manual_mood="very_happy",
+            text_analysis=text,
+        )
+        assert result["fused_mood"] == "very_happy"
+
+    def test_camera_text_disagreement_asks_for_confirmation(self):
+        # Manual "calm" vs a confident camera "sad": the mood of record stays
+        # "calm", but the gap must still be surfaced to the user.
+        camera = {
+            "emotion": "sad",
+            "confidence": 0.8,
+            "valence": -1.0,
+            "suggested_mood": "stressed",
+        }
+        result = self.engine.fuse(
+            manual_mood="calm",
+            camera_analysis=camera,
+        )
+        assert result["fused_mood"] == "calm"
+        assert result["needs_confirmation"] is True
+
+    def test_ai_suggested_mood_preserves_blend(self):
+        # The AI read must remain visible instead of being discarded when it
+        # differs from the manual selection. Manual "calm" (0.3) blended with
+        # a confident camera "sad" (-1.0) lands at -0.133, i.e. "okay".
+        camera = {
+            "emotion": "sad",
+            "confidence": 0.8,
+            "valence": -1.0,
+            "suggested_mood": "stressed",
+        }
+        result = self.engine.fuse(
+            manual_mood="calm",
+            camera_analysis=camera,
+        )
+        assert result["fused_mood"] == "calm"
+        assert result["ai_suggested_mood"] == "okay"
+        assert result["ai_suggested_mood"] != result["fused_mood"]
+        assert result["blended_valence"] == pytest.approx(-0.1333, abs=1e-3)
+
+    def test_agreement_reports_no_confirmation(self):
+        camera = {
+            "emotion": "happy",
+            "confidence": 0.8,
+            "valence": 0.7,
+        }
+        result = self.engine.fuse(
+            manual_mood="happy",
+            camera_analysis=camera,
+        )
+        assert result["fused_mood"] == "happy"
+        assert result["ai_suggested_mood"] == "happy"
+        assert result["needs_confirmation"] is False
+
+    def test_ai_only_blend_used_when_no_manual_mood(self):
+        # Without a manual selection the AI read becomes the mood of record.
+        camera = {
+            "emotion": "sad",
+            "confidence": 0.8,
+            "valence": -0.8,
+            "suggested_mood": "stressed",
+        }
+        result = self.engine.fuse(camera_analysis=camera)
+        assert result["fused_mood"] == "stressed"
+        assert result["ai_suggested_mood"] == "stressed"
+
+    def test_manual_mood_without_ai_sources_needs_no_confirmation(self):
+        # Manual-only check-ins must not nag the user to confirm themselves.
+        result = self.engine.fuse(manual_mood="low")
+        assert result["fused_mood"] == "low"
+        assert result["sources_used"] == ["MANUAL"]
+        assert result["needs_confirmation"] is False
 
 
 # ── Schema Validation ─────────────────────────────────────────────────

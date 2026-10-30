@@ -51,15 +51,27 @@ class _MoodHistoryScreenState extends State<MoodHistoryScreen> {
       ],
       body: loading
           ? const LoadingView()
-          : entries.isEmpty
-              ? const EmptyStateView(
-                  icon: Icons.history_rounded,
-                  title: 'No moods recorded',
-                  message:
-                      'Your mood history will appear here once you start '
-                      'logging how you feel.',
+          : controller.error != null
+              ? EmptyStateView(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load history',
+                  message: 'Check your connection and try again.',
+                  actionLabel: 'Retry',
+                  onAction: () {
+                    final c = context.read<MoodController>();
+                    c.loadEntries();
+                    c.loadStatistics();
+                  },
                 )
-              : CustomScrollView(
+              : entries.isEmpty
+                  ? const EmptyStateView(
+                      icon: Icons.history_rounded,
+                      title: 'No moods recorded',
+                      message:
+                          'Your mood history will appear here once you start '
+                          'logging how you feel.',
+                    )
+                  : CustomScrollView(
                   slivers: [
                     SliverPadding(
                       padding: const EdgeInsets.fromLTRB(

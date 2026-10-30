@@ -130,7 +130,12 @@ public class MoodTrendAnalyzer {
                 .toList();
     }
 
-    static int moodToValue(String mood) {
+    /**
+     * Single source of truth for mapping a mood id to its 1-6 trend value.
+     * Shared by mood statistics, trend analysis, progress aggregation and
+     * onboarding mood scoring — do not duplicate this table elsewhere.
+     */
+    public static int moodToValue(String mood) {
         return switch (mood) {
             case "very_happy" -> 6;
             case "happy" -> 5;

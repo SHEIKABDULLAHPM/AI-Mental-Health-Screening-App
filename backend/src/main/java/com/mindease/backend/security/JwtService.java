@@ -2,6 +2,7 @@ package com.mindease.backend.security;
 
 import java.time.Instant;
 import java.util.Date;
+import java.util.UUID;
 
 import javax.crypto.SecretKey;
 
@@ -41,8 +42,22 @@ public class JwtService {
         this.refreshMillis = jwt.getRefreshExpiration().toMillis();
     }
 
+    /**
+     * Fresh unique token id.
+     *
+     * <p>Without a per-issuance random claim, two tokens minted for the same
+     * user inside the same clock second are byte-identical (same subject, issuer,
+     * iat and exp). Refresh tokens are stored under a unique {@code tokenHash}
+     * index, so a rapid second login collided and surfaced as a 500. Every
+     * issuance now carries a distinct {@code jti}.</p>
+     */
+    private String newTokenId() {
+        return UUID.randomUUID().toString();
+    }
+
     public String createAccessToken(String userId, Instant now) {
         return Jwts.builder()
+                .id(newTokenId())
                 .subject(userId)
                 .issuer(issuer)
                 .issuedAt(Date.from(now))
@@ -54,6 +69,7 @@ public class JwtService {
 
     public String createRefreshToken(String userId, Instant now) {
         return Jwts.builder()
+                .id(newTokenId())
                 .subject(userId)
                 .issuer(issuer)
                 .issuedAt(Date.from(now))

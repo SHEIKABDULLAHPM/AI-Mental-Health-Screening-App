@@ -12,6 +12,8 @@ import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
 import com.mindease.backend.common.logging.AuditLog;
 import com.mindease.backend.consent.application.ConsentService;
+import com.mindease.backend.features.mood.application.MoodService;
+import com.mindease.backend.screening.domain.MoodAssessment;
 import com.mindease.backend.screening.domain.Screening;
 import com.mindease.backend.screening.domain.ScreeningRepository;
 import com.mindease.backend.screening.domain.ScreeningStatus;
@@ -42,6 +44,8 @@ public class ScreeningService {
     private final AiAnalysisJobService aiJobs;
     private final ScreeningValidator validator;
     private final AuditLog audit;
+    private final QuestionnaireCatalogService catalogs;
+    private final MoodService moods;
 
     public ScreeningService(ScreeningRepository screenings,
                             UserRepository users,
@@ -50,7 +54,9 @@ public class ScreeningService {
                             WellnessAnalysisService analysisService,
                             AiAnalysisJobService aiJobs,
                             ScreeningValidator validator,
-                            AuditLog audit) {
+                            AuditLog audit,
+                            QuestionnaireCatalogService catalogs,
+                            MoodService moods) {
         this.screenings = screenings;
         this.users = users;
         this.consents = consents;
@@ -59,6 +65,8 @@ public class ScreeningService {
         this.aiJobs = aiJobs;
         this.validator = validator;
         this.audit = audit;
+        this.catalogs = catalogs;
+        this.moods = moods;
     }
 
     /**
@@ -75,6 +83,7 @@ public class ScreeningService {
         draft.setId(null);
         draft.setUserId(userId);
         draft.setStatus(ScreeningStatus.IN_PROGRESS);
+        draft.setCatalogVersion(catalogs.current().getVersion());
         draft.setStartedAt(Instant.now());
         draft.setUpdatedAt(Instant.now());
         draft.setCompletedAt(null);
@@ -112,9 +121,22 @@ public class ScreeningService {
             throw new ApiException(ErrorCode.BAD_REQUEST,
                     "This assessment has already been submitted and cannot be edited.");
         }
-        existing.setPersonal(draft.getPersonal());
-        existing.setLifestyle(draft.getLifestyle());
-        existing.setAssessments(draft.getAssessments());
+        // Explicit null sections mean "no change" — never wipe stored answers
+        // with a partial/degenerate payload (validated below either way).
+        if (draft.getPersonal() != null) {
+            existing.setPersonal(draft.getPersonal());
+        }
+        if (draft.getLifestyle() != null) {
+            existing.setLifestyle(draft.getLifestyle());
+        }
+        if (draft.getAssessments() != null) {
+            existing.setAssessments(draft.getAssessments());
+        }
+        if (draft.getMood() != null) {
+            existing.setMood(mergeMood(existing.getMood(), draft.getMood()));
+        }
+        // Answers may be edited under a newer catalog — restamp server-side.
+        existing.setCatalogVersion(catalogs.current().getVersion());
         existing.setUpdatedAt(Instant.now());
         validator.validateDraft(existing);
         return screenings.save(existing);
@@ -129,6 +151,11 @@ public class ScreeningService {
      * <p>Idempotent and race-safe: a replayed or concurrent submit that finds
      * an existing AI job for the assessment reuses it - exactly one job and
      * one wellness profile are ever created per assessment.</p>
+     *
+     * <p>The deterministic scores are published to the profile immediately,
+     * before the AI job runs, so they are readable even while the insight is
+     * pending. The status stays {@code AI_ANALYSIS_PENDING} until the AI
+     * service completes the job and supplies {@code aiInsight}.</p>
      */
     public ScreeningSubmitResponse submit(String userId, String id) {
         Screening screening = getById(userId, id);
@@ -141,6 +168,21 @@ public class ScreeningService {
                 completeScreening(userId, screening);
             }
             WellnessProfile profile = profiles.ensurePendingFor(userId, screening.getId());
+            // Re-publish the deterministic scores on a replay. Profiles created
+            // before scores were published at submit time (or interrupted by a
+            // failure) get repaired here, so a user who has an existing job can
+            // still obtain their results without an LLM round-trip.
+            publishDeterministicScores(userId, screening);
+            // Best-effort mood backfill for replays where the first submit
+            // attached no snapshot; never creates a second job or profile.
+            try {
+                WellnessAnalysisService.MoodSummary replayMood = resolveMoodSummary(userId, screening);
+                if (replayMood != null) {
+                    profiles.attachMoodSnapshot(userId, screening.getId(), replayMood);
+                }
+            } catch (Exception ignored) {
+                // Reuse path stays intact without mood context.
+            }
             return ScreeningSubmitResponse.completed(screening, profile.getStatus(),
                     profile.getId(), existingJob.get().getId());
         }
@@ -155,12 +197,47 @@ public class ScreeningService {
         WellnessProfile profile = profiles.ensurePendingFor(userId, saved.getId());
         WellnessAnalysisService.Scores raw = analysisService.scores(saved);
         WellnessAnalysisService.Analysis analysis = analysisService.analyze(saved);
+        // Publish the deterministic scores now rather than withholding them
+        // behind the AI job: they are a pure function of the stored answers, so
+        // an LLM outage must never cost the user their own results. The job
+        // later adds only the insight narrative and flips the status.
+        publishDeterministicScores(userId, saved);
+        // Reuse the existing mood history + trend calculation (single source of
+        // truth). Failures here never block the assessment — the profile and
+        // AI job proceed with deterministic scores and no mood context.
+        WellnessAnalysisService.MoodSummary moodSummary = resolveMoodSummary(userId, saved);
+        if (moodSummary != null) {
+            try {
+                profiles.attachMoodSnapshot(userId, saved.getId(), moodSummary);
+            } catch (Exception ignored) {
+                // Pending profile stays usable without the mood snapshot.
+            }
+        }
         AiAnalysisJob job = aiJobs.create(userId, saved.getId(),
-                toDeterministicScores(raw, analysis));
+                toDeterministicScores(raw, analysis, moodSummary));
         audit.event(userId, "assessment.submitted", saved.getId());
 
         return ScreeningSubmitResponse.completed(saved, profile.getStatus(),
                 profile.getId(), job.getId());
+    }
+
+    /**
+     * Publishes the deterministic scores onto the profile so they are readable
+     * without waiting for the AI job. Best-effort: if the write fails the job
+     * is still queued and re-applies the same values on completion, so the user
+     * keeps a path to their results either way.
+     */
+    private void publishDeterministicScores(String userId, Screening screening) {
+        try {
+            WellnessAnalysisService.Analysis analysis = analysisService.analyze(screening);
+            profiles.attachDeterministicScores(userId, screening.getId(),
+                    analysis.wellnessScore(), analysis.stressLevel(),
+                    analysis.lifestyleScore(), analysis.sleepQuality(),
+                    analysis.primaryFocus(), screening.hasSelfHarmSignal());
+        } catch (Exception ignored) {
+            // Deterministic scores are also carried in the AI job payload and
+            // re-applied when the job completes.
+        }
     }
 
     /** Marks the screening COMPLETED and flips the user's onboarding state. */
@@ -179,7 +256,8 @@ public class ScreeningService {
     }
 
     private DeterministicScores toDeterministicScores(
-            WellnessAnalysisService.Scores s, WellnessAnalysisService.Analysis a) {
+            WellnessAnalysisService.Scores s, WellnessAnalysisService.Analysis a,
+            WellnessAnalysisService.MoodSummary mood) {
         DeterministicScores scores = new DeterministicScores();
         scores.setPhq9(s.phq9());
         scores.setGad7(s.gad7());
@@ -190,7 +268,136 @@ public class ScreeningService {
         scores.setLifestyleScore(a.lifestyleScore());
         scores.setSleepQuality(a.sleepQuality());
         scores.setPrimaryFocus(a.primaryFocus());
+        if (mood != null) {
+            scores.setOnboardingMood(mood.mood());
+            scores.setOnboardingMoodScore(mood.moodScore());
+            scores.setOnboardingMoodEmotion(mood.emotion());
+            scores.setOnboardingMoodIntensity(mood.intensity());
+            scores.setMoodTrendDirection(mood.trendDirection());
+            scores.setMoodTrendDescription(mood.trendDescription());
+            scores.setMoodHistoryCount(mood.historyCount());
+            scores.setCameraEmotion(mood.cameraEmotion());
+            scores.setCameraConfidence(mood.cameraConfidence());
+            scores.setCameraModelVersion(mood.cameraModelVersion());
+            scores.setSignalAgreement(mood.signalAgreement());
+        }
         return scores;
+    }
+
+    /**
+     * Resolves the onboarding mood summary from the screening snapshot plus
+     * the user's existing mood history. The linked mood entry (if any) is
+     * ownership-checked and its CAMERA AI observation is extracted as the
+     * supporting camera signal — raw client fields are never trusted, and a
+     * foreign or deleted id degrades to history-only (no leakage, no
+     * failure). Returns null when no onboarding mood was provided; callers
+     * degrade gracefully.
+     */
+    private WellnessAnalysisService.MoodSummary resolveMoodSummary(String userId, Screening screening) {
+        MoodAssessment mood = screening.getMood();
+        if (mood == null || mood.getCurrentMood() == null || mood.getCurrentMood().isBlank()) {
+            return null;
+        }
+        WellnessAnalysisService.CameraSignal camera = null;
+        if (mood.getLinkedMoodEntryId() != null && !mood.getLinkedMoodEntryId().isBlank()) {
+            try {
+                com.mindease.backend.features.mood.dto.MoodResponse entry =
+                        moods.getMoodById(userId, mood.getLinkedMoodEntryId());
+                camera = extractCameraSignal(entry);
+            } catch (Exception ignored) {
+                // Fall through with history-only trend; the snapshot remains valid.
+            }
+        }
+        java.util.Map<String, Object> trends;
+        try {
+            trends = moods.getEnhancedTrends(userId, 30);
+        } catch (Exception ignored) {
+            trends = java.util.Map.of(
+                    "trend", java.util.Map.of(
+                            "direction", "unknown",
+                            "description", "Mood history is currently unavailable.",
+                            "dataPoints", 0),
+                    "totalEntries", 0L);
+        }
+        Object trendObj = trends.get("trend");
+        java.util.Map<String, Object> trendMap = trendObj instanceof java.util.Map<?, ?> m
+                ? uncheckedTrend(m) : java.util.Map.of(
+                        "direction", "unknown",
+                        "description", "Not enough mood records to determine a trend.",
+                        "dataPoints", 0);
+        int historyCount = 0;
+        Object total = trends.get("totalEntries");
+        if (total instanceof Number n) {
+            historyCount = n.intValue();
+        }
+        try {
+            return analysisService.moodSummary(mood, trendMap, historyCount, camera);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Extracts the camera supporting signal from a linked mood entry's AI
+     * observations. Only observations the fusion pipeline itself produced
+     * (source CAMERA) qualify; TEXT observations, unknown emotions, and
+     * missing data yield null (no signal) rather than a fabricated one.
+     */
+    private WellnessAnalysisService.CameraSignal extractCameraSignal(
+            com.mindease.backend.features.mood.dto.MoodResponse entry) {
+        if (entry == null || entry.aiObservations() == null) {
+            return null;
+        }
+        for (com.mindease.backend.features.mood.dto.MoodResponse.AiObservationDto obs
+                : entry.aiObservations()) {
+            if (obs != null && "CAMERA".equals(obs.source())
+                    && obs.emotion() != null && !obs.emotion().isBlank()
+                    && !"unknown".equalsIgnoreCase(obs.emotion())) {
+                return new WellnessAnalysisService.CameraSignal(
+                        obs.emotion(), obs.confidence(), obs.modelVersion());
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, Object> uncheckedTrend(java.util.Map<?, ?> raw) {
+        java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+        raw.forEach((k, v) -> out.put(String.valueOf(k), v));
+        return out;
+    }
+
+    /**
+     * Merges a partial mood draft into the stored snapshot. Explicit nulls mean
+     * "no change" so autosave payloads never wipe previously stored answers.
+     */
+    private MoodAssessment mergeMood(MoodAssessment existing, MoodAssessment draft) {
+        MoodAssessment base = existing != null ? existing : new MoodAssessment();
+        if (draft.getCurrentMood() != null) {
+            base.setCurrentMood(draft.getCurrentMood());
+        }
+        if (draft.getEmotion() != null) {
+            base.setEmotion(draft.getEmotion());
+        }
+        if (draft.getIntensity() != null) {
+            base.setIntensity(draft.getIntensity());
+        }
+        if (draft.getNote() != null) {
+            base.setNote(draft.getNote());
+        }
+        if (draft.getFrequency() != null) {
+            base.setFrequency(draft.getFrequency());
+        }
+        if (draft.getRecentChange() != null) {
+            base.setRecentChange(draft.getRecentChange());
+        }
+        if (draft.getContext() != null) {
+            base.setContext(draft.getContext());
+        }
+        if (draft.getLinkedMoodEntryId() != null) {
+            base.setLinkedMoodEntryId(draft.getLinkedMoodEntryId());
+        }
+        return base;
     }
 
     private void requireConsentCompleted(String userId) {

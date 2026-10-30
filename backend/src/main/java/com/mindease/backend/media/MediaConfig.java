@@ -15,7 +15,7 @@ import java.net.URI;
 @Configuration
 public class MediaConfig {
 
-    @Value("${mindease.media.url:http://minio:9000}")
+    @Value("${mindease.media.url:http://minio:9090}")
     private String endpointUrl;
 
     /**

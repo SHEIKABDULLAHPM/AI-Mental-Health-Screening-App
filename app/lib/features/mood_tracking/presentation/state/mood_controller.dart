@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:mindease/core/error/failures.dart';
@@ -11,7 +13,8 @@ abstract class MoodApi {
   Future<Map<String, dynamic>> getMoodEntry(String id);
   Future<List<Map<String, dynamic>>> getMoodTrends({int days = 14});
   Future<Map<String, dynamic>> getEnhancedTrends({int days = 30});
-  Future<void> recordMood({
+  Future<Map<String, dynamic>> getOnboardingMoodSummary();
+  Future<Map<String, dynamic>?> recordMood({
     required String mood,
     String? emotion,
     String? note,
@@ -29,6 +32,10 @@ abstract class MoodApi {
     Map<String, dynamic>? cameraObservation,
   });
   Future<Map<String, dynamic>> getStatistics();
+
+  /// Persist one on-device facial-expression observation as an immutable
+  /// emotion event (structured engine output). Returns the created event.
+  Future<Map<String, dynamic>> recordEmotionEvent(Map<String, dynamic> event);
 }
 
 /// Manages mood tracking state: entries, today's moods, trends,
@@ -44,12 +51,15 @@ class MoodController extends ChangeNotifier {
   List<Map<String, dynamic>> _trends = [];
   Map<String, dynamic>? _enhancedTrends;
   Map<String, dynamic>? _statistics;
-  bool _loading = false;
+  // Reference-counted loading: concurrent loadEntries/loadTrends/
+  // loadEnhancedTrends must not clear each other's spinner.
+  int _pendingLoads = 0;
   String? _error;
 
   // ── AI analysis state ──
   Map<String, dynamic>? _analysisResult;
   bool _analyzing = false;
+  bool _disposed = false;
   String? _analysisError;
 
   List<MoodEntry> get entries => _entries;
@@ -58,7 +68,7 @@ class MoodController extends ChangeNotifier {
   List<Map<String, dynamic>> get trends => _trends;
   Map<String, dynamic>? get enhancedTrends => _enhancedTrends;
   Map<String, dynamic>? get statistics => _statistics;
-  bool get loading => _loading;
+  bool get loading => _pendingLoads > 0;
   String? get error => _error;
 
   Map<String, dynamic>? get analysisResult => _analysisResult;
@@ -68,14 +78,38 @@ class MoodController extends ChangeNotifier {
   // ──────────────────────────────────────────── Loading helpers
 
   void _start() {
-    _loading = true;
+    _pendingLoads++;
     _error = null;
+    _deferNotify();
+  }
+
+  /// Listeners must not be notified synchronously from a loader a screen
+  /// calls out of `initState`: the provider scope sits above the router, and
+  /// marking it while the framework is still building that screen trips its
+  /// "setState() or markNeedsBuild() called during build" assertion. State is
+  /// already assigned synchronously, so the in-flight build reads the right
+  /// values; this only schedules the follow-up rebuild safely.
+  void _deferNotify() {
+    if (_disposed) return;
+    scheduleMicrotask(() {
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  void _finish() {
+    if (_pendingLoads > 0) _pendingLoads--;
     notifyListeners();
   }
 
   void _fail(Object e) {
     _error = _message(e);
-    _loading = false;
+    if (_pendingLoads > 0) _pendingLoads--;
     notifyListeners();
   }
 
@@ -91,8 +125,7 @@ class MoodController extends ChangeNotifier {
       final rows = await _api.getMoodEntries();
       _entries = rows.map(_fromApi).toList();
       _filterToday();
-      _loading = false;
-      notifyListeners();
+      _finish();
     } catch (e) {
       _fail(e);
     }
@@ -175,7 +208,9 @@ class MoodController extends ChangeNotifier {
   /// Record a new mood (optionally with AI observations) and reload entries.
   /// [aiObservations] should be a list of maps matching the backend
   /// AiObservationInput schema (source, emotion, confidence, sentiment, etc.).
-  Future<void> recordMood({
+  /// Returns the created entry id, or null when the server did not return one
+  /// (callers needing a link should treat null as "unlinked but recorded").
+  Future<String?> recordMood({
     required String moodId,
     String? emotion,
     String? note,
@@ -186,8 +221,9 @@ class MoodController extends ChangeNotifier {
     int? intensity,
   }) async {
     _start();
+    String? createdId;
     try {
-      await _api.recordMood(
+      final created = await _api.recordMood(
         mood: moodId,
         emotion: emotion,
         note: note,
@@ -197,10 +233,31 @@ class MoodController extends ChangeNotifier {
         aiObservations: aiObservations,
         intensity: intensity,
       );
+      createdId = created?['id'] as String?;
       _analysisResult = null;
-      await loadEntries();
     } catch (e) {
       _fail(e);
+      return null;
+    }
+    // Own write succeeded — release our slot before the refresh, which
+    // manages its own loading/error state via loadEntries().
+    if (_pendingLoads > 0) _pendingLoads--;
+    await loadEntries();
+    return createdId;
+  }
+
+  /// Persist a confirmed camera observation as an emotion event.
+  ///
+  /// Best-effort telemetry: returns the event id on success, null on
+  /// failure (logged). Never throws into the save flow — the mood record
+  /// itself must not fail because event ingestion did.
+  Future<String?> recordEmotionEvent(Map<String, dynamic> event) async {
+    try {
+      final created = await _api.recordEmotionEvent(event);
+      return created['id'] as String?;
+    } catch (e) {
+      debugPrint('recordEmotionEvent failed: $e');
+      return null;
     }
   }
 
@@ -209,8 +266,7 @@ class MoodController extends ChangeNotifier {
     _start();
     try {
       _trends = await _api.getMoodTrends(days: days);
-      _loading = false;
-      notifyListeners();
+      _finish();
     } catch (e) {
       _fail(e);
     }
@@ -225,8 +281,7 @@ class MoodController extends ChangeNotifier {
       _trends = (moodTrends is List)
           ? moodTrends.cast<Map<String, dynamic>>()
           : [];
-      _loading = false;
-      notifyListeners();
+      _finish();
     } catch (e) {
       _fail(e);
     }
@@ -237,10 +292,12 @@ class MoodController extends ChangeNotifier {
     _start();
     try {
       await _api.deleteMood(id);
-      await loadEntries();
     } catch (e) {
       _fail(e);
+      return;
     }
+    if (_pendingLoads > 0) _pendingLoads--;
+    await loadEntries();
   }
 
   /// Clear the current analysis result (e.g. when user cancels).
@@ -275,6 +332,12 @@ MoodEntry _fromApi(Map<String, dynamic> json) {
 }
 
 DateTime _parseDate(dynamic value) {
-  if (value is String) return DateTime.tryParse(value) ?? DateTime.now();
+  if (value is String) {
+    final parsed = DateTime.tryParse(value);
+    // Backend stores UTC instants; convert to local so day grouping and
+    // Today filters match the user's calendar near midnight.
+    if (parsed != null) return parsed.isUtc ? parsed.toLocal() : parsed;
+    return DateTime.now();
+  }
   return DateTime.now();
 }

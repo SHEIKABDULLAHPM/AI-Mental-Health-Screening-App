@@ -25,8 +25,7 @@ class ScreeningSession {
   static String? aiJobId;
 
   /// Builds the exact payload the backend expects for create/update.
-  static Map<String, dynamic> payload(ScreeningController c) {
-    final lifestyle = <String, dynamic>{};
+  static Map<String, dynamic> payload(ScreeningController c) {    final lifestyle = <String, dynamic>{};
     if (c.lifestyle[LifestyleField.sleepHours] != null) {
       lifestyle['sleepHours'] = c.lifestyle[LifestyleField.sleepHours]!;
     }
@@ -60,6 +59,23 @@ class ScreeningSession {
         'pss10': _answeredPrefix(c.pss),
         'who5': _answeredPrefix(c.who),
       }..removeWhere((_, v) => (v as List).isEmpty),
+      if (c.mood.isComplete) 'mood': moodPayload(c),
+    };
+  }
+
+  /// User-provided onboarding mood snapshot. Scores and trends are never sent
+  /// — the backend derives them from this snapshot plus mood history.
+  static Map<String, dynamic> moodPayload(ScreeningController c) {
+    final m = c.mood;
+    return <String, dynamic>{
+      'currentMood': m.currentMoodId,
+      if (m.emotion != null && m.emotion!.isNotEmpty) 'emotion': m.emotion,
+      if (m.intensityTouched) 'intensity': m.intensity,
+      if (m.reflection.trim().isNotEmpty) 'note': m.reflection.trim(),
+      if (m.frequency != null) 'frequency': m.frequency,
+      if (m.recentChange != null) 'recentChange': m.recentChange,
+      if (m.context != null && m.context!.isNotEmpty) 'context': m.context,
+      if (m.linkedMoodEntryId != null) 'linkedMoodEntryId': m.linkedMoodEntryId,
     };
   }
 
@@ -95,6 +111,8 @@ class ScreeningSession {
     controller.personal.age = '';
     controller.personal.gender = '';
     controller.personal.occupation = '';
+    controller.mood.clear();
+    controller.moodHistory.clear();
     controller.lifestyle.clear();
     _clearTo(controller.phq);
     _clearTo(controller.gad);

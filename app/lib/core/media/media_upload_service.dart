@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:mime/mime.dart';
 
-import 'package:mindease/core/config/app_config.dart';
+import 'package:mindease/core/config/server_endpoint.dart';
 import 'package:mindease/core/error/failures.dart';
 
 /// Handles file uploads to the backend media endpoint.
@@ -30,8 +30,11 @@ class MediaUploadService {
         'type': mediaType,
       });
 
+      // Resolve at call time like every other API call. Using the build-time
+      // AppConfig here made uploads fail on a physical phone even after the
+      // server address had been changed in Settings.
       final response = await _dio.post<Map<String, dynamic>>(
-        '${AppConfig.apiBaseUrl}/media/upload',
+        '${ServerEndpoint.current}/media/upload',
         data: formData,
         options: Options(
           receiveTimeout: const Duration(seconds: 60),
@@ -74,7 +77,7 @@ class MediaUploadService {
   Future<void> delete(String key) async {
     try {
       await _dio.delete<Map<String, dynamic>>(
-        '${AppConfig.apiBaseUrl}/media',
+        '${ServerEndpoint.current}/media',
         queryParameters: {'key': key},
       );
     } catch (_) {

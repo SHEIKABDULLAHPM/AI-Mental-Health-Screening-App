@@ -4,7 +4,7 @@ Combines manual mood selection, text NLP analysis, and camera facial affect
 into a single structured observation using an explicit deterministic
 fusion strategy.
 
-Fusion weights (manual mood is authoritative):
+Fusion weights (used to compute the *AI read* only):
   - Manual mood selection:   0.50  (user intent)
   - Text NLP analysis:      0.25  (linguistic signal)
   - Camera facial affect:   0.25  (physiological signal)
@@ -12,7 +12,13 @@ Fusion weights (manual mood is authoritative):
 If only two sources are available, weights are re-normalised.
 If only manual mood is provided, no AI observation is generated.
 
-The user's confirmed mood always overrides AI suggestions.
+Manual mood authority:
+  The user's self-reported mood is never overwritten by AI. When a valid
+  manual mood is present it is returned as ``fused_mood`` verbatim. The
+  weighted blend is still computed and reported as ``ai_suggested_mood`` so
+  the AI signal stays visible instead of being silently discarded. Any
+  material disagreement between the blend and the manual mood sets
+  ``needs_confirmation`` so the user is asked to reconcile it.
 
 Low-confidence handling:
   - If combined confidence < 0.30, returns fused_emotion="unknown"
@@ -56,6 +62,10 @@ _SENTIMENT_VALENCE: dict[str, float] = {
 # Low-confidence threshold — below this, return "unknown" emotion
 _LOW_CONFIDENCE_THRESHOLD = 0.30
 
+# Valence gap between the manual mood and the AI sources that counts as a
+# material disagreement worth asking the user about.
+_DISAGREEMENT_THRESHOLD = 0.4
+
 
 def _valence_to_mood(valence: float) -> str:
     for threshold, mood in _VALENCE_TO_MOOD:
@@ -78,7 +88,9 @@ class MultimodalFusionEngine:
         """Fuse available sources into a combined mood observation.
 
         Returns a dict with:
-          - fused_mood: str
+          - fused_mood: str  (the manual mood when provided, else the AI blend)
+          - ai_suggested_mood: str  (mood implied by the weighted blend)
+          - blended_valence: float  (weighted blend, informational)
           - fused_emotion: str
           - confidence: float (0.0–1.0)
           - sources_used: list[str]
@@ -128,7 +140,9 @@ class MultimodalFusionEngine:
         # ── No sources → neutral default ──
         if not sources:
             return {
-                "fused_mood": "okay",
+                "fused_mood": manual_mood if manual_mood else "okay",
+                "ai_suggested_mood": None,
+                "blended_valence": 0.0,
                 "fused_emotion": "unknown",
                 "confidence": 0.0,
                 "sources_used": [],
@@ -138,10 +152,17 @@ class MultimodalFusionEngine:
                 "needs_confirmation": True,
             }
 
-        # ── Weighted fusion ──
+        # ── Weighted blend of all contributing sources ──
         total_weight = sum(weights)
         weighted_valence = sum(v * w for v, w in zip(valences, weights)) / total_weight
-        fused_mood = _valence_to_mood(weighted_valence)
+        ai_suggested_mood = _valence_to_mood(weighted_valence)
+
+        # ── Manual mood is authoritative ──
+        # The reported mood is always what the user selected. The blend is
+        # reported separately so the AI read is preserved rather than
+        # silently replacing the user's own words.
+        manual_is_valid = bool(manual_mood and manual_mood in _MOOD_VALENCE)
+        fused_mood = manual_mood if manual_is_valid else ai_suggested_mood
 
         # Confidence = average of contributing confidences × source coverage
         # Only count sources that actually contributed to the fusion
@@ -169,11 +190,22 @@ class MultimodalFusionEngine:
                 fused_emotion = manual_emotion
 
         # ── Disagreement detection ──
-        # If manual mood and AI suggestion differ significantly, flag for confirmation
+        # Compare the user's manual mood against the AI sources *alone*
+        # (manual is excluded so its own 0.50 weight cannot mask the
+        # disagreement it is meant to reveal). A material gap means the AI
+        # observed something different from how the user reported feeling.
         needs_confirmation = False
-        if manual_mood and fused_mood != manual_mood:
-            manual_val = _MOOD_VALENCE.get(manual_mood, 0.0)
-            if abs(manual_val - weighted_valence) > 0.4:
+        ai_valences = [
+            (v, w)
+            for s, v, w in zip(sources, valences, weights)
+            if s in ("TEXT", "CAMERA")
+        ]
+        if manual_is_valid and ai_valences:
+            ai_valence = sum(v * w for v, w in ai_valences) / sum(
+                w for _, w in ai_valences
+            )
+            manual_val = _MOOD_VALENCE[manual_mood]
+            if abs(manual_val - ai_valence) > _DISAGREEMENT_THRESHOLD:
                 needs_confirmation = True
 
         # Low confidence always needs confirmation
@@ -184,6 +216,8 @@ class MultimodalFusionEngine:
             "mood_fusion_complete",
             sources=sources,
             fused_mood=fused_mood,
+            ai_suggested_mood=ai_suggested_mood,
+            blended_valence=round(weighted_valence, 4),
             fused_emotion=fused_emotion,
             confidence=round(combined_confidence, 4),
             needs_confirmation=needs_confirmation,
@@ -191,6 +225,8 @@ class MultimodalFusionEngine:
 
         return {
             "fused_mood": fused_mood,
+            "ai_suggested_mood": ai_suggested_mood,
+            "blended_valence": round(weighted_valence, 4),
             "fused_emotion": fused_emotion,
             "confidence": round(combined_confidence, 4),
             "sources_used": sources,

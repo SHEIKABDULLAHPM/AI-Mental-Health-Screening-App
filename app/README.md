@@ -42,6 +42,8 @@ lib/
 
 ## Run
 
+### Emulator
+
 ```bash
 flutter pub get
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
@@ -49,3 +51,24 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080/api/v1
 
 `10.0.2.2` is the Android emulator alias for the host machine (where Docker
 publishes the backend on localhost).
+
+### Physical device (wireless debugging)
+
+`10.0.2.2` only resolves inside the Android emulator. On a real phone it is
+unroutable and every request fails with *"Unable to reach the server"*, so the
+backend must be addressed by the host's LAN IP instead:
+
+```bash
+./scripts/run-app.sh
+```
+
+That helper finds the host LAN address, re-discovers the device's wireless
+connect port via mDNS (it rotates every time pairing is redone) and passes the
+right `--dart-define` values. Equivalent manual invocation:
+
+```bash
+flutter run -d <phone-ip>:<connect-port> \
+  --dart-define=API_BASE_URL=http://<host-lan-ip>:8080/api/v1
+```
+
+The backend is published on `0.0.0.0:8080`, so it is reachable from the LAN.

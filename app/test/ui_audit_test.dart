@@ -19,6 +19,7 @@ import 'package:mindease/features/onboarding/screening/screening_session.dart';
 import 'package:mindease/features/onboarding/screening/wellness_profile_screen.dart';
 import 'package:mindease/features/onboarding/splash/splash_screen.dart';
 import 'package:mindease/features/onboarding/welcome/welcome_screen.dart';
+import 'support/audit_providers.dart';
 
 Widget harness(String initial) {
   final router = GoRouter(
@@ -55,7 +56,9 @@ Widget harness(String initial) {
       GoRoute(path: '/dashboard', builder: (c, s) => const DashboardScreen()),
     ],
   );
-  return MaterialApp.router(theme: AppTheme.light(), routerConfig: router);
+  return withAuditProviders(
+    MaterialApp.router(theme: AppTheme.light(), routerConfig: router),
+  );
 }
 
 /// Captures Flutter error diagnostics (with offending widget) instead of letting

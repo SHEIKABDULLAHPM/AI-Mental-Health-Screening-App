@@ -60,6 +60,14 @@ void main() {
       // repeating loading-dots animation can be disposed.
       await tester.pump(const Duration(milliseconds: 1400));
       await tester.pump(const Duration(milliseconds: 400));
+      // Elapse the 45 s splash navigation bound (SplashScreen caps the
+      // session check so it can never strand the user): the timeout fires,
+      // the app navigates to /welcome, and no timer is left pending.
+      await tester.pump(const Duration(seconds: 46));
+      await tester.pump(const Duration(milliseconds: 400));
+      // Allow the /welcome transition to settle before asserting.
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.byType(SplashScreen), findsNothing);
     });
 
     testWidgets('renders brand lockup and meta block on short screens',
@@ -74,6 +82,11 @@ void main() {
 
       await tester.pump(const Duration(milliseconds: 1400));
       await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(seconds: 46));
+      await tester.pump(const Duration(milliseconds: 400));
+      // Allow the /welcome transition to settle before asserting.
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.byType(SplashScreen), findsNothing);
     });
   });
 }

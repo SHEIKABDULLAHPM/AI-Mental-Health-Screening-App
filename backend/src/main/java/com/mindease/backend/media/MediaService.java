@@ -1,9 +1,18 @@
 package com.mindease.backend.media;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.PushbackInputStream;
 import java.time.Instant;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,10 +22,12 @@ import org.springframework.web.multipart.MultipartFile;
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
 
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
@@ -42,14 +53,22 @@ public class MediaService {
             "video/mp4", "video/quicktime", "video/x-msvideo",
             "video/webm", "video/3gpp");
 
+    /** Object metadata key holding the real content type of a sealed object. */
+    private static final String CONTENT_TYPE_METADATA = "original-content-type";
+
     private final S3Client s3Client;
     private final S3Presigner presigner;
     private final MediaConfig config;
+    private final MediaCipher cipher;
+    private final MediaAccessToken accessToken;
 
-    public MediaService(S3Client s3Client, S3Presigner presigner, MediaConfig config) {
+    public MediaService(S3Client s3Client, S3Presigner presigner, MediaConfig config,
+                        MediaCipher cipher, MediaAccessToken accessToken) {
         this.s3Client = s3Client;
         this.presigner = presigner;
         this.config = config;
+        this.cipher = cipher;
+        this.accessToken = accessToken;
     }
 
     /**
@@ -63,13 +82,31 @@ public class MediaService {
         String key = buildKey(userId, mediaType, file.getOriginalFilename());
 
         try (InputStream is = file.getInputStream()) {
-            s3Client.putObject(
-                    PutObjectRequest.builder()
-                            .bucket(config.getBucket())
-                            .key(key)
-                            .contentType(file.getContentType())
-                            .build(),
-                    RequestBody.fromInputStream(is, file.getSize()));
+            if (cipher.isEnabled()) {
+                // The object is sealed in 1 MiB chunks, so memory stays bounded
+                // even for a 100 MB video. The real content type travels as
+                // object metadata because the stored bytes are ciphertext.
+                s3Client.putObject(
+                        PutObjectRequest.builder()
+                                .bucket(config.getBucket())
+                                .key(key)
+                                .contentType("application/octet-stream")
+                                .metadata(Map.of(CONTENT_TYPE_METADATA,
+                                        describeContentType(file)))
+                                .build(),
+                        RequestBody.fromContentProvider(
+                                () -> uncheckEncrypt(is),
+                                MediaCipher.sealedLength(file.getSize()),
+                                "application/octet-stream"));
+            } else {
+                s3Client.putObject(
+                        PutObjectRequest.builder()
+                                .bucket(config.getBucket())
+                                .key(key)
+                                .contentType(file.getContentType())
+                                .build(),
+                        RequestBody.fromInputStream(is, file.getSize()));
+            }
         } catch (Exception e) {
             log.warn("media_upload_failed userId={} type={}", userId, mediaType);
             throw new ApiException(ErrorCode.INTERNAL_ERROR,
@@ -90,8 +127,20 @@ public class MediaService {
     /**
      * Generate a presigned URL for secure, time-limited access.
      */
+    /**
+     * URL the client can fetch the object from.
+     *
+     * <p>Without encryption this is the object store's presigned URL, exactly as
+     * before. With encryption the bytes must be decrypted on the way out, so it
+     * points at the backend's own download endpoint carrying a short-lived, per
+     * -object signature. The address is derived from the request that is being
+     * answered, so it stays reachable from whichever host the client used.</p>
+     */
     public String getPresignedUrl(String objectKey) {
         if (objectKey == null || objectKey.isBlank()) return null;
+        if (cipher.isEnabled()) {
+            return sealedObjectUrl(objectKey);
+        }
         try {
             return presigner.presignGetObject(
                     GetObjectPresignRequest.builder()
@@ -108,6 +157,90 @@ public class MediaService {
             return null;
         }
     }
+
+    private String sealedObjectUrl(String objectKey) {
+        if (!accessToken.isEnabled()) {
+            log.warn("media_access_token_disabled key={}", objectKey);
+            return null;
+        }
+        String base = currentRequestBaseUrl();
+        if (base == null) {
+            log.warn("media_access_url_unavailable key={}", objectKey);
+            return null;
+        }
+        long expiry = System.currentTimeMillis() / 1000L + accessToken.ttlSeconds();
+        String signature = accessToken.sign(objectKey, expiry);
+        return base + "/api/v1/media/object?key="
+                + java.net.URLEncoder.encode(objectKey, java.nio.charset.StandardCharsets.UTF_8)
+                + "&exp=" + expiry + "&sig=" + signature;
+    }
+
+    private static String currentRequestBaseUrl() {
+        if (!(RequestContextHolder.getRequestAttributes()
+                instanceof ServletRequestAttributes attributes)) {
+            return null;
+        }
+        HttpServletRequest request = attributes.getRequest();
+        String scheme = request.getScheme();
+        String host = request.getServerName();
+        int port = request.getServerPort();
+        boolean defaultPort = ("http".equals(scheme) && port == 80)
+                || ("https".equals(scheme) && port == 443);
+        return scheme + "://" + host + (defaultPort ? "" : ":" + port);
+    }
+
+    /**
+     * Opens an object for delivery, decrypting sealed media on the fly.
+     *
+     * <p>Objects written before encryption was enabled are stored as plaintext;
+     * those are recognised by the missing marker and streamed unchanged, so
+     * turning encryption on never makes earlier media unreadable.</p>
+     */
+    public StoredMedia open(String objectKey) {
+        ResponseInputStream<GetObjectResponse> object = s3Client.getObject(
+                GetObjectRequest.builder()
+                        .bucket(config.getBucket())
+                        .key(objectKey)
+                        .build());
+        String contentType = object.response().metadata().get(CONTENT_TYPE_METADATA);
+        if (contentType == null || contentType.isBlank()) {
+            contentType = object.response().contentType();
+        }
+        if (!cipher.isEnabled()) {
+            return new StoredMedia(object, contentType, object.response().contentLength());
+        }
+        try {
+            PushbackInputStream probe = new PushbackInputStream(object, MediaCipher.MAGIC.length);
+            byte[] prefix = probe.readNBytes(MediaCipher.MAGIC.length);
+            probe.unread(prefix);
+            if (MediaCipher.looksEncrypted(prefix)) {
+                return new StoredMedia(cipher.decrypting(probe), contentType, -1L);
+            }
+            // Written before encryption was switched on.
+            return new StoredMedia(probe, contentType, object.response().contentLength());
+        } catch (IOException e) {
+            throw new ApiException(ErrorCode.INTERNAL_ERROR,
+                    "Failed to read media. Please try again.");
+        }
+    }
+
+    private static String describeContentType(MultipartFile file) {
+        String contentType = file.getContentType();
+        return contentType == null || contentType.isBlank()
+                ? "application/octet-stream"
+                : contentType.toLowerCase(Locale.ROOT);
+    }
+
+    private InputStream uncheckEncrypt(InputStream plaintext) {
+        try {
+            return cipher.encrypting(plaintext);
+        } catch (IOException e) {
+            throw new IllegalStateException("Media encryption failed.", e);
+        }
+    }
+
+    /** An object ready to be written to the response. */
+    public record StoredMedia(InputStream stream, String contentType, long contentLength) {}
 
     /**
      * Delete a media object. Failures are logged but not propagated

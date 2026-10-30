@@ -42,20 +42,37 @@ class _SplashScreenState extends State<SplashScreen>
     await Future.delayed(const Duration(milliseconds: 1800));
     if (!mounted || _navigated) return;
     _navigated = true;
+    // Hard bound on the whole decision: the splash screen must never strand
+    // the user, even if secure-storage reads stall or the network hangs
+    // beyond the HTTP client's own timeouts. Any failure (including the
+    // timeout itself) falls through to the signed-out destination, exactly
+    // like an invalid session.
     String destination = '/welcome';
-    final token = await sessionStore.accessToken();
-    if (token != null) {
-      try {
-        final user = await mindeaseApi.me();
-        destination = await JourneyRouter.nextRoute(user);
-      } on Object {
-        // The stored session is invalid/expired - treat as signed out.
-        await sessionStore.clear();
-        destination = '/welcome';
-      }
+    try {
+      destination = await _resolveDestination().timeout(
+        const Duration(seconds: 45),
+        onTimeout: () => '/welcome',
+      );
+    } on Object {
+      destination = '/welcome';
     }
     if (!mounted) return;
     context.go(destination);
+  }
+
+  /// Session check: signed-out → /welcome, signed-in → journey route.
+  /// Throws on any failure; callers map failure to '/welcome'.
+  Future<String> _resolveDestination() async {
+    final token = await sessionStore.accessToken();
+    if (token == null) return '/welcome';
+    try {
+      final user = await mindeaseApi.me();
+      return await JourneyRouter.nextRoute(user);
+    } on Object {
+      // The stored session is invalid/expired - treat as signed out.
+      await sessionStore.clear();
+      return '/welcome';
+    }
   }
 
   @override

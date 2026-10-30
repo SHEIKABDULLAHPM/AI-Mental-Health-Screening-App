@@ -7,6 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -39,6 +42,12 @@ public class CoachService {
 
     @Value("${mindease.coach.max-conversation-history:20}")
     private int maxConversationHistory;
+
+    @Value("${mindease.ai.service-url:http://ai-service:8000/api/v1}")
+    private String aiBaseUrl = "http://ai-service:8000/api/v1";
+
+    @Value("${mindease.ai.internal-api-key:}")
+    private String internalApiKey = "";
 
     public CoachService(
             ConversationService conversationService,
@@ -159,10 +168,16 @@ public class CoachService {
         try {
             // Call the AI service RAG endpoint for wellness knowledge
             // This is a best-effort retrieval; failure is non-blocking
-            String url = "http://ai-service:8000/api/v1/rag/retrieve";
+            String url = aiBaseUrl + "/rag/retrieve";
             Map<String, Object> request = Map.of("query", query);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            if (internalApiKey != null && !internalApiKey.isBlank()) {
+                headers.set("X-Internal-Api-Key", internalApiKey);
+            }
             @SuppressWarnings("unchecked")
-            var response = (Map<String, Object>) restTemplate.postForObject(url, request, Map.class);
+            var response = (Map<String, Object>) restTemplate.postForObject(
+                    url, new HttpEntity<>(request, headers), Map.class);
             if (response != null && response.containsKey("chunks")) {
                 @SuppressWarnings("unchecked")
                 List<String> chunks = (List<String>) response.get("chunks");

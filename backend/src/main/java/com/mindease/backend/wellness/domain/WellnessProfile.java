@@ -46,6 +46,53 @@ public class WellnessProfile {
 
     private String aiInsight;
 
+    /**
+     * Safety escalation flag derived from PHQ-9 item 9 (self-harm ideation).
+     * True when the stored answer is greater than zero. This is never exposed
+     * as a diagnosis - it only unlocks an explicit support/help affordance.
+     */
+    private Boolean safetyFlag;
+
+    // ── Integrated Mood Check-In summary (all nullable for backward compat) ──
+    // user-provided: moodMood/moodEmotion/moodIntensity (copied from screening)
+    // calculated:    moodScore/moodTrendDirection/moodTrendDescription/moodHistoryCount
+    // AI-derived:    aiInsight (now mood-aware, still stored in aiInsight)
+
+    /** Self-reported onboarding mood id. */
+    private String moodMood;
+
+    /** Self-reported onboarding emotion tag. */
+    private String moodEmotion;
+
+    /** Self-reported onboarding intensity 1-10. */
+    private Integer moodIntensity;
+
+    /** Deterministic 1-6 mood value derived from moodMood. */
+    private Integer moodScore;
+
+    /** Deterministic mood trend direction (or "unknown"). */
+    private String moodTrendDirection;
+
+    /** Human-readable mood trend description. */
+    private String moodTrendDescription;
+
+    /** Historical mood entry count at assessment time. */
+    private Integer moodHistoryCount;
+
+    // ── Camera supporting signal (all nullable; absent = skipped/unclear) ──
+    // The model/version that produced the signal is preserved on the linked
+    // mood entry's aiObservations + emotion event; the profile keeps only the
+    // interpretation-relevant subset for the insight and dashboard.
+
+    /** Stable camera-detected canonical emotion (e.g. neutral, happy). */
+    private String cameraEmotion;
+
+    /** Camera confidence 0-1 from the fusion result. */
+    private Double cameraConfidence;
+
+    /** Deterministic verdict: agree|close|differs|noSignal. */
+    private String signalAgreement;
+
     private Instant createdAt;
 
     private Instant updatedAt;
@@ -139,6 +186,94 @@ public class WellnessProfile {
 
     public void setAiInsight(String aiInsight) {
         this.aiInsight = aiInsight;
+    }
+
+    public Boolean getSafetyFlag() {
+        return safetyFlag;
+    }
+
+    public void setSafetyFlag(Boolean safetyFlag) {
+        this.safetyFlag = safetyFlag;
+    }
+
+    public String getMoodMood() {
+        return moodMood;
+    }
+
+    public void setMoodMood(String moodMood) {
+        this.moodMood = moodMood;
+    }
+
+    public String getMoodEmotion() {
+        return moodEmotion;
+    }
+
+    public void setMoodEmotion(String moodEmotion) {
+        this.moodEmotion = moodEmotion;
+    }
+
+    public Integer getMoodIntensity() {
+        return moodIntensity;
+    }
+
+    public void setMoodIntensity(Integer moodIntensity) {
+        this.moodIntensity = moodIntensity;
+    }
+
+    public Integer getMoodScore() {
+        return moodScore;
+    }
+
+    public void setMoodScore(Integer moodScore) {
+        this.moodScore = moodScore;
+    }
+
+    public String getMoodTrendDirection() {
+        return moodTrendDirection;
+    }
+
+    public void setMoodTrendDirection(String moodTrendDirection) {
+        this.moodTrendDirection = moodTrendDirection;
+    }
+
+    public String getMoodTrendDescription() {
+        return moodTrendDescription;
+    }
+
+    public void setMoodTrendDescription(String moodTrendDescription) {
+        this.moodTrendDescription = moodTrendDescription;
+    }
+
+    public Integer getMoodHistoryCount() {
+        return moodHistoryCount;
+    }
+
+    public void setMoodHistoryCount(Integer moodHistoryCount) {
+        this.moodHistoryCount = moodHistoryCount;
+    }
+
+    public String getCameraEmotion() {
+        return cameraEmotion;
+    }
+
+    public void setCameraEmotion(String cameraEmotion) {
+        this.cameraEmotion = cameraEmotion;
+    }
+
+    public Double getCameraConfidence() {
+        return cameraConfidence;
+    }
+
+    public void setCameraConfidence(Double cameraConfidence) {
+        this.cameraConfidence = cameraConfidence;
+    }
+
+    public String getSignalAgreement() {
+        return signalAgreement;
+    }
+
+    public void setSignalAgreement(String signalAgreement) {
+        this.signalAgreement = signalAgreement;
     }
 
     public Instant getCreatedAt() {

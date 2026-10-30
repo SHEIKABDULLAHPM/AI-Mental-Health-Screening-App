@@ -1,482 +1,588 @@
 package com.mindease.backend.features.challenges.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 
 import com.mindease.backend.common.error.ApiException;
-import com.mindease.backend.common.error.ErrorCode;
 import com.mindease.backend.features.challenges.domain.Challenge;
+import com.mindease.backend.features.challenges.domain.ChallengeFrequency;
+import com.mindease.backend.features.challenges.domain.ChallengeProgressEvent;
+import com.mindease.backend.features.challenges.domain.ChallengeProgressEventRepository;
 import com.mindease.backend.features.challenges.domain.ChallengeRepository;
+import com.mindease.backend.features.challenges.domain.ChallengeStatus;
+import com.mindease.backend.features.challenges.domain.ChallengeType;
+import com.mindease.backend.features.challenges.domain.UserBadge;
+import com.mindease.backend.features.challenges.domain.UserBadgeRepository;
 import com.mindease.backend.features.challenges.domain.UserChallenge;
 import com.mindease.backend.features.challenges.domain.UserChallengeRepository;
 import com.mindease.backend.features.challenges.dto.ChallengeResponse;
+import com.mindease.backend.personalization.application.PersonalizationService;
+import com.mindease.backend.personalization.domain.PersonalizedContext;
 
 @ExtendWith(MockitoExtension.class)
 class ChallengeServiceTest {
 
     @Mock
     private ChallengeRepository challengeRepository;
-
     @Mock
     private UserChallengeRepository userChallengeRepository;
+    @Mock
+    private ChallengeProgressEventRepository progressEventRepository;
+    @Mock
+    private UserBadgeRepository badgeRepository;
+    @Mock
+    private PersonalizationService personalizationService;
+    @Mock
+    private MongoTemplate mongoTemplate;
 
     private ChallengeService service;
 
     private static final String USER_ID = "user-1";
     private static final String OTHER_USER_ID = "user-2";
     private static final String CHALLENGE_ID = "challenge-1";
-    private static final String USER_CHALLENGE_ID = "uc-1";
+    private static final String SOURCE_ID = "mood-123";
 
     @BeforeEach
     void setUp() {
-        service = new ChallengeService(challengeRepository, userChallengeRepository);
+        service = new ChallengeService(challengeRepository, userChallengeRepository,
+                progressEventRepository, badgeRepository, personalizationService, mongoTemplate);
     }
 
-    // --------------------------------------------------------- getAvailableChallenges
+    // ── Activity-driven progress ─────────────────────────────────────
 
     @Test
-    void getAvailableChallengesReturnsActiveChallenges() {
-        Challenge c1 = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        Challenge c2 = buildChallenge("challenge-2", "Gratitude Journal", 14, 200, "journal", true);
+    void applyActivityAdvancesOpenInProgressChallenge() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 0, 1,
+                ChallengeStatus.IN_PROGRESS);
 
-        when(challengeRepository.findByActiveTrue()).thenReturn(List.of(c1, c2));
-
-        List<ChallengeResponse> results = service.getAvailableChallenges();
-
-        assertThat(results).hasSize(2);
-        assertThat(results.get(0).id()).isEqualTo(CHALLENGE_ID);
-        assertThat(results.get(0).title()).isEqualTo("Mindfulness Week");
-        assertThat(results.get(0).durationDays()).isEqualTo(7);
-        assertThat(results.get(0).points()).isEqualTo(100);
-        assertThat(results.get(0).isCompleted()).isFalse();
-        assertThat(results.get(1).id()).isEqualTo("challenge-2");
-    }
-
-    @Test
-    void getAvailableChallengesReturnsEmptyListWhenNoneActive() {
-        when(challengeRepository.findByActiveTrue()).thenReturn(Collections.emptyList());
-
-        List<ChallengeResponse> results = service.getAvailableChallenges();
-
-        assertThat(results).isEmpty();
-    }
-
-    // --------------------------------------------------------- getChallengeById
-
-    @Test
-    void getChallengeByIdReturnsChallengeWithUserProgress() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        UserChallenge userChallenge = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 3, false);
-
-        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.of(userChallenge));
-
-        ChallengeResponse response = service.getChallengeById(USER_ID, CHALLENGE_ID);
-
-        assertThat(response.id()).isEqualTo(CHALLENGE_ID);
-        assertThat(response.title()).isEqualTo("Mindfulness Week");
-        assertThat(response.currentDay()).isEqualTo(3);
-        assertThat(response.isCompleted()).isFalse();
-    }
-
-    @Test
-    void getChallengeByIdReturnsChallengeWithoutProgressWhenNotStarted() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-
-        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.empty());
-
-        ChallengeResponse response = service.getChallengeById(USER_ID, CHALLENGE_ID);
-
-        assertThat(response.id()).isEqualTo(CHALLENGE_ID);
-        assertThat(response.currentDay()).isZero();
-        assertThat(response.isCompleted()).isFalse();
-    }
-
-    @Test
-    void getChallengeByIdThrowsNotFoundForInactiveChallenge() {
-        when(challengeRepository.findByIdAndActiveTrue("inactive-id"))
-                .thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.getChallengeById(USER_ID, "inactive-id"))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getCode())
-                .isEqualTo(ErrorCode.NOT_FOUND);
-    }
-
-    // --------------------------------------------------------- startChallenge
-
-    @Test
-    void startChallengeCreatesUserChallenge() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-
-        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.empty());
-
-        UserChallenge saved = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 0, false);
-        when(userChallengeRepository.save(any())).thenReturn(saved);
-
-        ChallengeResponse response = service.startChallenge(USER_ID, CHALLENGE_ID);
-
-        assertThat(response.id()).isEqualTo(CHALLENGE_ID);
-        assertThat(response.currentDay()).isZero();
-        assertThat(response.isCompleted()).isFalse();
-
-        ArgumentCaptor<UserChallenge> captor = ArgumentCaptor.forClass(UserChallenge.class);
-        verify(userChallengeRepository).save(captor.capture());
-        UserChallenge captured = captor.getValue();
-        assertThat(captured.getUserId()).isEqualTo(USER_ID);
-        assertThat(captured.getChallengeId()).isEqualTo(CHALLENGE_ID);
-        assertThat(captured.getCurrentDay()).isZero();
-        assertThat(captured.isCompleted()).isFalse();
-        assertThat(captured.getStartedAt()).isNotNull();
-        assertThat(captured.getUpdatedAt()).isNotNull();
-    }
-
-    @Test
-    void startChallengeRejectsIfAlreadyStarted() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        UserChallenge existing = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 2, false);
-
-        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.of(existing));
-
-        assertThatThrownBy(() -> service.startChallenge(USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .satisfies(ex -> {
-                    assertThat(((ApiException) ex).getCode()).isEqualTo(ErrorCode.BAD_REQUEST);
-                    assertThat(ex.getMessage()).contains("already started");
-                });
-
-        verify(userChallengeRepository, never()).save(any());
-    }
-
-    // --------------------------------------------------------- updateProgress
-
-    @Test
-    void updateProgressIncrementsCurrentDay() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 2, false);
-
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
+        when(challengeRepository.findByActiveTrueAndType(ChallengeType.MOOD_CHECK_IN.name()))
+                .thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
                 .thenReturn(Optional.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.save(any())).thenReturn(uc);
+        when(progressEventRepository
+                .existsByUserIdAndChallengeIdAndPeriodStartAndSourceRecordId(USER_ID, CHALLENGE_ID, period, SOURCE_ID))
+                .thenReturn(false);
 
-        ChallengeResponse response = service.updateProgress(USER_ID, CHALLENGE_ID);
+        // Idempotency event insert succeeds, and the progress increment reaches target.
+        when(progressEventRepository.save(any(ChallengeProgressEvent.class)))
+                .thenReturn(new ChallengeProgressEvent());
+        UserChallenge after = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 1, 1, ChallengeStatus.IN_PROGRESS);
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class),
+                any(org.springframework.data.mongodb.core.FindAndModifyOptions.class),
+                eq(UserChallenge.class)))
+                .thenReturn(after);
 
-        assertThat(response.currentDay()).isEqualTo(3);
-        assertThat(response.isCompleted()).isFalse();
+        service.applyActivity(USER_ID, ChallengeType.MOOD_CHECK_IN, SOURCE_ID, null);
 
-        ArgumentCaptor<UserChallenge> captor = ArgumentCaptor.forClass(UserChallenge.class);
-        verify(userChallengeRepository).save(captor.capture());
-        assertThat(captor.getValue().getCurrentDay()).isEqualTo(3);
-        assertThat(captor.getValue().isCompleted()).isFalse();
-        assertThat(captor.getValue().getUpdatedAt()).isNotNull();
+        verify(progressEventRepository).save(any(ChallengeProgressEvent.class));
     }
 
     @Test
-    void updateProgressMarksCompletedWhenReachingDurationDays() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 3, 100, "meditation", true);
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 2, false);
+    void applyActivitySkipsDuplicateSourceRecord() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 0, 1,
+                ChallengeStatus.IN_PROGRESS);
 
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
+        when(challengeRepository.findByActiveTrueAndType(ChallengeType.MOOD_CHECK_IN.name()))
+                .thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
                 .thenReturn(Optional.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.save(any())).thenReturn(uc);
+        when(progressEventRepository
+                .existsByUserIdAndChallengeIdAndPeriodStartAndSourceRecordId(USER_ID, CHALLENGE_ID, period, SOURCE_ID))
+                .thenReturn(true);
 
-        ChallengeResponse response = service.updateProgress(USER_ID, CHALLENGE_ID);
+        service.applyActivity(USER_ID, ChallengeType.MOOD_CHECK_IN, SOURCE_ID, null);
 
-        assertThat(response.currentDay()).isEqualTo(3);
-        assertThat(response.isCompleted()).isTrue();
-
-        ArgumentCaptor<UserChallenge> captor = ArgumentCaptor.forClass(UserChallenge.class);
-        verify(userChallengeRepository).save(captor.capture());
-        assertThat(captor.getValue().isCompleted()).isTrue();
-        assertThat(captor.getValue().getCompletedAt()).isNotNull();
+        verify(progressEventRepository, never()).save(any(ChallengeProgressEvent.class));
+        verify(mongoTemplate, never()).findAndModify(any(), any(), any(), eq(UserChallenge.class));
     }
 
     @Test
-    void updateProgressThrowsNotFoundForOtherUserChallenge() {
-        when(userChallengeRepository.findByUserIdAndChallengeId(OTHER_USER_ID, CHALLENGE_ID))
+    void applyActivitySkipsChallengeNotStartedByUser() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+
+        when(challengeRepository.findByActiveTrueAndType(ChallengeType.MOOD_CHECK_IN.name()))
+                .thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
                 .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.updateProgress(OTHER_USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getCode())
-                .isEqualTo(ErrorCode.NOT_FOUND);
+        service.applyActivity(USER_ID, ChallengeType.MOOD_CHECK_IN, SOURCE_ID, null);
 
-        verify(userChallengeRepository, never()).save(any());
+        verify(progressEventRepository, never()).save(any());
+        verify(mongoTemplate, never()).findAndModify(any(), any(), any(), eq(UserChallenge.class));
     }
 
     @Test
-    void updateProgressRejectsAlreadyCompletedChallenge() {
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 3, true);
+    void applyActivitySkipsCompletedChallenge() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 1, 1,
+                ChallengeStatus.COMPLETED);
 
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
+        when(challengeRepository.findByActiveTrueAndType(ChallengeType.MOOD_CHECK_IN.name()))
+                .thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
                 .thenReturn(Optional.of(uc));
 
-        assertThatThrownBy(() -> service.updateProgress(USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .satisfies(ex -> {
-                    assertThat(((ApiException) ex).getCode()).isEqualTo(ErrorCode.BAD_REQUEST);
-                    assertThat(ex.getMessage()).contains("already completed");
-                });
+        service.applyActivity(USER_ID, ChallengeType.MOOD_CHECK_IN, SOURCE_ID, null);
 
-        verify(userChallengeRepository, never()).save(any());
+        verify(progressEventRepository, never()).save(any());
     }
 
-    // --------------------------------------------------------- completeChallenge
-
     @Test
-    void completeChallengeMarksCompleted() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 4, false);
+    void applyActivityHandlesDuplicateKeyFromRace() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 0, 1,
+                ChallengeStatus.IN_PROGRESS);
 
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
+        when(challengeRepository.findByActiveTrueAndType(ChallengeType.MOOD_CHECK_IN.name()))
+                .thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
                 .thenReturn(Optional.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
-        when(userChallengeRepository.save(any())).thenReturn(uc);
+        when(progressEventRepository
+                .existsByUserIdAndChallengeIdAndPeriodStartAndSourceRecordId(USER_ID, CHALLENGE_ID, period, SOURCE_ID))
+                .thenReturn(false);
+        when(progressEventRepository.save(any(ChallengeProgressEvent.class)))
+                .thenThrow(new DuplicateKeyException("dup"));
 
-        ChallengeResponse response = service.completeChallenge(USER_ID, CHALLENGE_ID);
+        service.applyActivity(USER_ID, ChallengeType.MOOD_CHECK_IN, SOURCE_ID, null);
 
-        assertThat(response.isCompleted()).isTrue();
-        assertThat(response.currentDay()).isEqualTo(7);
+        verify(mongoTemplate, never()).findAndModify(any(), any(), any(), eq(UserChallenge.class));
+    }
 
-        ArgumentCaptor<UserChallenge> captor = ArgumentCaptor.forClass(UserChallenge.class);
-        verify(userChallengeRepository).save(captor.capture());
-        UserChallenge saved = captor.getValue();
-        assertThat(saved.isCompleted()).isTrue();
-        assertThat(saved.getCompletedAt()).isNotNull();
-        assertThat(saved.getCurrentDay()).isEqualTo(7);
-        assertThat(saved.getUpdatedAt()).isNotNull();
+    // ── Start ────────────────────────────────────────────────────────
+
+    @Test
+    void startCreatesActiveInstanceForPeriod() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+
+        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID)).thenReturn(Optional.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
+                .thenReturn(Optional.empty());
+        when(userChallengeRepository.save(any(UserChallenge.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        ChallengeResponse resp = service.startChallenge(USER_ID, CHALLENGE_ID, null);
+
+        assertThat(resp.id()).isEqualTo(CHALLENGE_ID);
+        assertThat(resp.status()).isEqualTo(ChallengeStatus.ACTIVE.name());
+        assertThat(resp.progress()).isZero();
+        assertThat(resp.target()).isEqualTo(1);
     }
 
     @Test
-    void completeChallengeRejectsAlreadyCompletedChallenge() {
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 7, true);
+    void startReusesOpenInstanceForSamePeriod() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 0, 1,
+                ChallengeStatus.ACTIVE);
 
-        when(userChallengeRepository.findByUserIdAndChallengeId(USER_ID, CHALLENGE_ID))
+        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID)).thenReturn(Optional.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
                 .thenReturn(Optional.of(uc));
 
-        assertThatThrownBy(() -> service.completeChallenge(USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .satisfies(ex -> {
-                    assertThat(((ApiException) ex).getCode()).isEqualTo(ErrorCode.BAD_REQUEST);
-                    assertThat(ex.getMessage()).contains("already completed");
-                });
+        ChallengeResponse resp = service.startChallenge(USER_ID, CHALLENGE_ID, null);
 
+        assertThat(resp.status()).isEqualTo(ChallengeStatus.ACTIVE.name());
         verify(userChallengeRepository, never()).save(any());
     }
 
     @Test
-    void completeChallengeThrowsNotFoundForOtherUserChallenge() {
-        when(userChallengeRepository.findByUserIdAndChallengeId(OTHER_USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.completeChallenge(OTHER_USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getCode())
-                .isEqualTo(ErrorCode.NOT_FOUND);
+    void startThrowsNotFoundForInactiveChallenge() {
+        when(challengeRepository.findByIdAndActiveTrue("missing")).thenReturn(Optional.empty());
+        try {
+            service.startChallenge(USER_ID, "missing", null);
+        } catch (ApiException e) {
+            assertThat(e.getMessage()).contains("not found");
+            return;
+        }
+        throw new AssertionError("expected ApiException");
     }
 
-    // --------------------------------------------------------- getActiveChallenges
+    // ── Home & eligibility ───────────────────────────────────────────
 
     @Test
-    void getActiveChallengesReturnsIncompleteChallenges() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 3, false);
+    void homeFiltersIneligibleChallenges() {
+        Challenge journalChallenge = buildChallenge("c-j", "Journal",
+                ChallengeType.JOURNALING, ChallengeFrequency.DAILY, 1, "JOURNAL_REFLECTION_1");
+        journalChallenge.setEligibilityRule("journal:any");
 
-        when(userChallengeRepository.findByUserIdAndCompletedFalseOrderByStartedAtDesc(USER_ID))
-                .thenReturn(List.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
+        when(challengeRepository.findByActiveTrue()).thenReturn(List.of(journalChallenge));
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "MOOD_CHECK_IN"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "JOURNALING"))
+                .thenReturn(List.of()); // user has no journal activity → not eligible
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "RELAXATION"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "HEALTHY_ROUTINE"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdOrderByOccurredAtDesc(USER_ID)).thenReturn(List.of());
+        when(badgeRepository.findByUserIdOrderByEarnedAtDesc(USER_ID)).thenReturn(List.of());
 
-        List<ChallengeResponse> results = service.getActiveChallenges(USER_ID);
+        var home = service.getHome(USER_ID, null);
 
-        assertThat(results).hasSize(1);
-        assertThat(results.get(0).id()).isEqualTo(CHALLENGE_ID);
-        assertThat(results.get(0).currentDay()).isEqualTo(3);
-        assertThat(results.get(0).isCompleted()).isFalse();
-    }
-
-    @Test
-    void getActiveChallengesReturnsEmptyListWhenNoneActive() {
-        when(userChallengeRepository.findByUserIdAndCompletedFalseOrderByStartedAtDesc(USER_ID))
-                .thenReturn(Collections.emptyList());
-
-        List<ChallengeResponse> results = service.getActiveChallenges(USER_ID);
-
-        assertThat(results).isEmpty();
-    }
-
-    @Test
-    void getActiveChallengesFiltersOutDeletedChallenges() {
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 3, false);
-
-        when(userChallengeRepository.findByUserIdAndCompletedFalseOrderByStartedAtDesc(USER_ID))
-                .thenReturn(List.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.empty());
-
-        List<ChallengeResponse> results = service.getActiveChallenges(USER_ID);
-
-        assertThat(results).isEmpty();
+        // Ineligible journal challenge must not appear as active or recommended.
+        assertThat(home.active()).isEmpty();
+        assertThat(home.completed()).isEmpty();
+        assertThat(home.recommended()).isNull();
     }
 
     @Test
-    void getActiveChallengesReturnsEmptyForOtherUser() {
-        when(userChallengeRepository.findByUserIdAndCompletedFalseOrderByStartedAtDesc(OTHER_USER_ID))
-                .thenReturn(Collections.emptyList());
+    void homeListsActiveAndCompletedChallenges() {
+        Challenge daily = buildChallenge("c-d", "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        Challenge completed = buildChallenge("c-w", "Weekly Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.WEEKLY, 5, "MOOD_CONSISTENCY_5");
+        daily.setEligibilityRule("always");
+        completed.setEligibilityRule("always");
 
-        List<ChallengeResponse> results = service.getActiveChallenges(OTHER_USER_ID);
+        String period = periodKey(ChallengeFrequency.DAILY);
+        String weeklyPeriod = periodKey(ChallengeFrequency.WEEKLY);
+        UserChallenge active = buildUserChallenge(USER_ID, "c-d", period, 1, 1, ChallengeStatus.COMPLETED);
+        UserChallenge weekly = buildUserChallenge(USER_ID, "c-w", weeklyPeriod, 3, 5, ChallengeStatus.IN_PROGRESS);
 
-        assertThat(results).isEmpty();
-        verify(challengeRepository, never()).findById(any());
+        when(challengeRepository.findByActiveTrue()).thenReturn(List.of(daily, completed));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, "c-d", period))
+                .thenReturn(Optional.of(active));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, "c-w", weeklyPeriod))
+                .thenReturn(Optional.of(weekly));
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "MOOD_CHECK_IN"))
+                .thenReturn(buildEvents(5));
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "JOURNALING"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "RELAXATION"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "HEALTHY_ROUTINE"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdOrderByOccurredAtDesc(USER_ID)).thenReturn(buildEvents(5));
+        when(badgeRepository.findByUserIdOrderByEarnedAtDesc(USER_ID)).thenReturn(List.of());
+
+        var home = service.getHome(USER_ID, null);
+
+        assertThat(home.completed()).hasSize(1);
+        assertThat(home.active()).hasSize(1);
+        assertThat(home.active().get(0).progress()).isEqualTo(3);
     }
 
-    // --------------------------------------------------------- getCompletedChallenges
+    // ── Badges ───────────────────────────────────────────────────────
 
     @Test
-    void getCompletedChallengesReturnsCompletedChallenges() {
-        Challenge challenge = buildChallenge(CHALLENGE_ID, "Mindfulness Week", 7, 100, "meditation", true);
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 7, true);
+    void getBadgesReturnsUserScopedBadges() {
+        UserBadge badge = new UserBadge();
+        badge.setUserId(USER_ID);
+        badge.setCode("MOOD_CHECK_IN_1");
+        badge.setLabel("Mood Check-In");
+        badge.setChallengeId(CHALLENGE_ID);
+        badge.setEarnedAt(Instant.now());
 
-        when(userChallengeRepository.findByUserIdAndCompletedTrueOrderByCompletedAtDesc(USER_ID))
-                .thenReturn(List.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.of(challenge));
+        when(badgeRepository.findByUserIdOrderByEarnedAtDesc(USER_ID)).thenReturn(List.of(badge));
 
-        List<ChallengeResponse> results = service.getCompletedChallenges(USER_ID);
+        var badges = service.getBadges(USER_ID);
+        assertThat(badges).hasSize(1);
+        assertThat(badges.get(0).code()).isEqualTo("MOOD_CHECK_IN_1");
+    }
 
-        assertThat(results).hasSize(1);
-        assertThat(results.get(0).id()).isEqualTo(CHALLENGE_ID);
-        assertThat(results.get(0).isCompleted()).isTrue();
-        assertThat(results.get(0).currentDay()).isEqualTo(7);
+    // ── Expiration ───────────────────────────────────────────────────
+
+    @Test
+    void expireIfOverdueTransitionsOpenChallengeToExpired() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 0, 1,
+                ChallengeStatus.ACTIVE);
+        uc.setExpiresAt(Instant.now().minusSeconds(3600)); // expired 1 hour ago
+
+        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID)).thenReturn(Optional.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
+                .thenReturn(Optional.of(uc));
+        when(userChallengeRepository.save(any(UserChallenge.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var resp = service.getChallenge(USER_ID, CHALLENGE_ID, null);
+
+        assertThat(resp.status()).isEqualTo(ChallengeStatus.EXPIRED.name());
+        verify(userChallengeRepository).save(any(UserChallenge.class));
     }
 
     @Test
-    void getCompletedChallengesReturnsEmptyListWhenNoneCompleted() {
-        when(userChallengeRepository.findByUserIdAndCompletedTrueOrderByCompletedAtDesc(USER_ID))
-                .thenReturn(Collections.emptyList());
+    void completedChallengeIsNotOverwrittenByExpiration() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 1, 1,
+                ChallengeStatus.COMPLETED);
+        uc.setCompletedAt(Instant.now());
 
-        List<ChallengeResponse> results = service.getCompletedChallenges(USER_ID);
+        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID)).thenReturn(Optional.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
+                .thenReturn(Optional.of(uc));
 
-        assertThat(results).isEmpty();
-    }
+        var resp = service.getChallenge(USER_ID, CHALLENGE_ID, null);
 
-    @Test
-    void getCompletedChallengesFiltersOutDeletedChallenges() {
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 7, true);
-
-        when(userChallengeRepository.findByUserIdAndCompletedTrueOrderByCompletedAtDesc(USER_ID))
-                .thenReturn(List.of(uc));
-        when(challengeRepository.findById(CHALLENGE_ID))
-                .thenReturn(Optional.empty());
-
-        List<ChallengeResponse> results = service.getCompletedChallenges(USER_ID);
-
-        assertThat(results).isEmpty();
-    }
-
-    @Test
-    void getCompletedChallengesReturnsEmptyForOtherUser() {
-        when(userChallengeRepository.findByUserIdAndCompletedTrueOrderByCompletedAtDesc(OTHER_USER_ID))
-                .thenReturn(Collections.emptyList());
-
-        List<ChallengeResponse> results = service.getCompletedChallenges(OTHER_USER_ID);
-
-        assertThat(results).isEmpty();
-        verify(challengeRepository, never()).findById(any());
-    }
-
-    // --------------------------------------------------------- ownership validation
-
-    @Test
-    void updateProgressRejectsForeignUserChallenge() {
-        UserChallenge uc = buildUserChallenge(USER_CHALLENGE_ID, USER_ID, CHALLENGE_ID, 2, false);
-
-        when(userChallengeRepository.findByUserIdAndChallengeId(OTHER_USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.updateProgress(OTHER_USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getCode())
-                .isEqualTo(ErrorCode.NOT_FOUND);
-
+        assertThat(resp.status()).isEqualTo(ChallengeStatus.COMPLETED.name());
+        assertThat(resp.completedAt()).isNotNull();
         verify(userChallengeRepository, never()).save(any());
     }
 
+    // ── Completion & Badge ──────────────────────────────────────────
+
     @Test
-    void completeChallengeRejectsForeignUserChallenge() {
-        when(userChallengeRepository.findByUserIdAndChallengeId(OTHER_USER_ID, CHALLENGE_ID))
-                .thenReturn(Optional.empty());
+    void applyActivityCompletesChallengeAndGrantsBadge() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+        // Challenge is in progress with 0/1 — one more activity completes it.
+        UserChallenge uc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 0, 1,
+                ChallengeStatus.IN_PROGRESS);
 
-        assertThatThrownBy(() -> service.completeChallenge(OTHER_USER_ID, CHALLENGE_ID))
-                .isInstanceOf(ApiException.class)
-                .extracting(e -> ((ApiException) e).getCode())
-                .isEqualTo(ErrorCode.NOT_FOUND);
+        when(challengeRepository.findByActiveTrueAndType(ChallengeType.MOOD_CHECK_IN.name()))
+                .thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, period))
+                .thenReturn(Optional.of(uc));
+        when(progressEventRepository
+                .existsByUserIdAndChallengeIdAndPeriodStartAndSourceRecordId(USER_ID, CHALLENGE_ID, period, SOURCE_ID))
+                .thenReturn(false);
+        when(progressEventRepository.save(any(ChallengeProgressEvent.class)))
+                .thenReturn(new ChallengeProgressEvent());
 
-        verify(userChallengeRepository, never()).save(any());
+        // findAndModify: progress increments to 1/1 → completes
+        UserChallenge afterProgress = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 1, 1,
+                ChallengeStatus.IN_PROGRESS);
+        // findAndModify: finalizeCompletion sets COMPLETED
+        UserChallenge afterCompletion = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 1, 1,
+                ChallengeStatus.COMPLETED);
+        afterCompletion.setCompletedAt(Instant.now());
+
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class),
+                any(org.springframework.data.mongodb.core.FindAndModifyOptions.class),
+                eq(UserChallenge.class)))
+                .thenReturn(afterProgress)  // first call: advance progress
+                .thenReturn(afterCompletion); // second call: finalize completion
+
+        // finalizeCompletion now calls findById to update streak before findAndModify
+        UserChallenge streakUc = buildUserChallenge(USER_ID, CHALLENGE_ID, period, 1, 1,
+                ChallengeStatus.IN_PROGRESS);
+        streakUc.setId("uc-" + CHALLENGE_ID);
+        when(userChallengeRepository.findById("uc-" + CHALLENGE_ID))
+                .thenReturn(Optional.of(streakUc));
+
+        when(badgeRepository.save(any(UserBadge.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.applyActivity(USER_ID, ChallengeType.MOOD_CHECK_IN, SOURCE_ID, null);
+
+        // Badge should have been granted
+        verify(badgeRepository).save(any(UserBadge.class));
     }
 
-    // --------------------------------------------------------- helpers
+    // ── IDOR ───────────────────────────────────────────────────────
 
-    private static Challenge buildChallenge(
-            String id, String title, int durationDays, int points, String type, boolean active) {
+    @Test
+    void startChallengeUsesServerDerivedUserId() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+        String period = periodKey(ChallengeFrequency.DAILY);
+
+        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID)).thenReturn(Optional.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(OTHER_USER_ID, CHALLENGE_ID, period))
+                .thenReturn(Optional.empty());
+        when(userChallengeRepository.save(any(UserChallenge.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // Start as OTHER_USER_ID — the userId is server-derived, never from the request body
+        var resp = service.startChallenge(OTHER_USER_ID, CHALLENGE_ID, null);
+
+        assertThat(resp.id()).isEqualTo(CHALLENGE_ID);
+        // Verify the saved UserChallenge has OTHER_USER_ID, not USER_ID
+        verify(userChallengeRepository).save(argThat(uc ->
+                OTHER_USER_ID.equals(uc.getUserId()) && !USER_ID.equals(uc.getUserId())));
+    }
+
+    @Test
+    void getHomeReturnsOnlyOwnData() {
+        // This test verifies that getHome only queries using the provided userId.
+        // Since all repository calls are user-scoped, this is inherently protected.
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+
+        when(challengeRepository.findByActiveTrue()).thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, periodKey(ChallengeFrequency.DAILY)))
+                .thenReturn(Optional.empty());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "MOOD_CHECK_IN"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "JOURNALING"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "RELAXATION"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "HEALTHY_ROUTINE"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdOrderByOccurredAtDesc(USER_ID)).thenReturn(List.of());
+        when(badgeRepository.findByUserIdOrderByEarnedAtDesc(USER_ID)).thenReturn(List.of());
+
+        var home = service.getHome(USER_ID, null);
+
+        // Verify repositories were queried with USER_ID, not OTHER_USER_ID
+        verify(userChallengeRepository).findByUserIdAndChallengeIdAndPeriodStart(
+                eq(USER_ID), any(), any());
+        verify(badgeRepository).findByUserIdOrderByEarnedAtDesc(eq(USER_ID));
+    }
+
+    // ── Weekly period ───────────────────────────────────────────────
+
+    @Test
+    void startWeeklyChallengeUsesMondayPeriod() {
+        Challenge c = buildChallenge(CHALLENGE_ID, "Weekly Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.WEEKLY, 5, "MOOD_CONSISTENCY_5");
+        // The weekly period key should be the Monday of the current week
+        String expectedPeriod = periodKey(ChallengeFrequency.WEEKLY);
+
+        when(challengeRepository.findByIdAndActiveTrue(CHALLENGE_ID)).thenReturn(Optional.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(USER_ID, CHALLENGE_ID, expectedPeriod))
+                .thenReturn(Optional.empty());
+        when(userChallengeRepository.save(any(UserChallenge.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        var resp = service.startChallenge(USER_ID, CHALLENGE_ID, null);
+
+        assertThat(resp.target()).isEqualTo(5);
+        assertThat(resp.frequency()).isEqualTo(ChallengeFrequency.WEEKLY.name());
+        verify(userChallengeRepository).save(argThat(uc ->
+                expectedPeriod.equals(uc.getPeriodStart())));
+    }
+
+    @Test
+    void getChallengeThrowsNotFoundForInactiveChallenge() {
+        when(challengeRepository.findByIdAndActiveTrue("nonexistent")).thenReturn(Optional.empty());
+        try {
+            service.getChallenge(USER_ID, "nonexistent", null);
+        } catch (ApiException e) {
+            assertThat(e.getMessage()).contains("not found");
+            return;
+        }
+        throw new AssertionError("expected ApiException for missing challenge");
+    }
+
+    // ── Streak (via StreakCalculator) ───────────────────────────────
+
+    @Test
+    void homeComputesStreakFromProgressEvents() {
+        // 3 consecutive days of activity → streak should be 3
+        Challenge c = buildChallenge(CHALLENGE_ID, "Daily Mood", ChallengeType.MOOD_CHECK_IN,
+                ChallengeFrequency.DAILY, 1, "MOOD_CHECK_IN_1");
+
+        when(challengeRepository.findByActiveTrue()).thenReturn(List.of(c));
+        when(userChallengeRepository.findByUserIdAndChallengeIdAndPeriodStart(eq(USER_ID), eq(CHALLENGE_ID), any()))
+                .thenReturn(Optional.empty());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "MOOD_CHECK_IN"))
+                .thenReturn(buildEvents(3));
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "JOURNALING"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "RELAXATION"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdAndActivityKindOrderByOccurredAtDesc(USER_ID, "HEALTHY_ROUTINE"))
+                .thenReturn(List.of());
+        when(progressEventRepository.findByUserIdOrderByOccurredAtDesc(USER_ID)).thenReturn(buildEvents(3));
+        when(badgeRepository.findByUserIdOrderByEarnedAtDesc(USER_ID)).thenReturn(List.of());
+
+        var home = service.getHome(USER_ID, null);
+
+        assertThat(home.currentStreak()).isEqualTo(3);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    private static Challenge buildChallenge(String id, String title, ChallengeType type,
+                                            ChallengeFrequency freq, int target, String badge) {
         Challenge c = new Challenge();
         c.setId(id);
         c.setTitle(title);
-        c.setDescription("A " + durationDays + "-day challenge");
-        c.setDurationDays(durationDays);
-        c.setPoints(points);
-        c.setType(type);
-        c.setActive(active);
+        c.setDescription("description");
+        c.setType(type.name());
+        c.setFrequency(freq.name());
+        c.setTarget(target);
+        c.setPoints(10);
+        c.setReward("reward");
+        c.setBadgeCode(badge);
+        c.setActive(true);
         c.setCreatedAt(Instant.now());
         c.setUpdatedAt(Instant.now());
         return c;
     }
 
-    private static UserChallenge buildUserChallenge(
-            String id, String userId, String challengeId, int currentDay, boolean completed) {
+    private static UserChallenge buildUserChallenge(String userId, String challengeId,
+                                                    String period, int progress, int target,
+                                                    ChallengeStatus status) {
         UserChallenge uc = new UserChallenge();
-        uc.setId(id);
+        uc.setId("uc-" + challengeId);
         uc.setUserId(userId);
         uc.setChallengeId(challengeId);
-        uc.setCurrentDay(currentDay);
-        uc.setCompleted(completed);
+        uc.setPeriodStart(period);
+        uc.setProgress(progress);
+        uc.setTarget(target);
+        uc.setStatusEnum(status);
         uc.setStartedAt(Instant.now());
         uc.setUpdatedAt(Instant.now());
-        if (completed) {
-            uc.setCompletedAt(Instant.now());
-        }
         return uc;
+    }
+
+    private static List<ChallengeProgressEvent> buildEvents(int n) {
+        var events = new java.util.ArrayList<ChallengeProgressEvent>();
+        for (int i = 0; i < n; i++) {
+            ChallengeProgressEvent e = new ChallengeProgressEvent();
+            e.setActivityDate(activityDate(i));
+            e.setOccurredAt(Instant.now().minusSeconds(i * 86400L));
+            events.add(e);
+        }
+        return events;
+    }
+
+    // ── Time helpers ───────────────────────────────────────────────────────────
+    // Period keys and activity dates are derived server-side in UTC by
+    // ChallengePeriodCalculator (the default zone when the user has no
+    // timezone). Deriving the stubs here through that same helper keeps these
+    // tests correct regardless of the timezone of the machine running them.
+    // Using the JVM default zone instead made the whole class fail for the five
+    // hours after local midnight in any zone ahead of UTC (e.g. IST, UTC+5),
+    // because the expected day was already ahead of the UTC day the service
+    // computes.
+    private static String periodKey(ChallengeFrequency frequency) {
+        return ChallengePeriodCalculator.periodKey(
+                Instant.now(), frequency, ChallengePeriodCalculator.zone(null));
+    }
+
+    private static String activityDate(int daysAgo) {
+        return java.time.LocalDate.now(ChallengePeriodCalculator.zone(null))
+                .minusDays(daysAgo).toString();
     }
 }

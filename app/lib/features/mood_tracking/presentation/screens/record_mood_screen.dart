@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'package:mindease/core/constants/moods.dart';
 import 'package:mindease/core/theme/app_spacing.dart';
+import 'package:mindease/features/mood_tracking/domain/emotion/camera_emotion_mapping.dart';
 import 'package:mindease/features/mood_tracking/presentation/screens/camera_mood_screen.dart';
 import 'package:mindease/features/mood_tracking/presentation/state/mood_controller.dart';
 import 'package:mindease/features/mood_tracking/presentation/widgets/mood_widgets.dart';
@@ -29,6 +30,12 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
   bool _useAi = true;
   double _intensity = 5;
 
+  /// Stable idempotency key for the emotion-event POST: one per screen
+  /// instance, so retries/double-taps replay the same event instead of
+  /// duplicating it (server dedupes by key).
+  late final String _eventKey = 'cam-${DateTime.now().millisecondsSinceEpoch}'
+      '-${widget.cameraResult?.framesAnalyzed ?? 0}';
+
   @override
   void initState() {
     super.initState();
@@ -39,16 +46,12 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
     }
   }
 
-  String? _mapCameraEmotionToLabel(String emotion) {
-    const mapping = {
-      'happy': 'Hopeful',
-      'sad': 'Sad',
-      'neutral': 'Content',
-      'surprised': 'Overwhelmed',
-      'angry': 'Irritated',
-    };
-    return mapping[emotion];
-  }
+  /// Map the canonical emotion id to a user-facing tag.
+  /// Versioned in [kCameraEmotionMappingVersion]; the canonical class is
+  /// always preserved in the camera observation payload. Null only for
+  /// 'unknown' (no pre-fill).
+  String? _mapCameraEmotionToLabel(String emotion) =>
+      mapCanonicalToTag(emotion);
 
   @override
   void dispose() {
@@ -57,6 +60,7 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     if (_selected == null) {
       AppSnackbar.show(context, 'Pick how you are feeling first.');
       return;
@@ -129,7 +133,10 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
           source = 'MANUAL';
         }
 
-        final suggestedMood = analysis['fused_mood'] as String?;
+        // Persist the AI's actual read, not the fused result: the user's own
+        // selection is already stored as the mood, and fusing now echoes it back,
+        // so `fused_mood` would lose the AI signal entirely.
+        final suggestedMood = analysis['ai_suggested_mood'] as String?;
 
         await controller.recordMood(
           moodId: _selected!.id,
@@ -151,11 +158,25 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
         );
       }
     } else {
+      // Fusion unavailable or not requested. The check-in is still saved with
+      // the note and, when the device produced one, the local camera result —
+      // no AI mood is invented.
       await controller.recordMood(
         moodId: _selected!.id,
         emotion: _emotion,
         note: _note.text.isEmpty ? null : _note.text,
-        source: 'MANUAL',
+        source: hasCamera ? 'CAMERA' : 'MANUAL',
+        aiObservations: hasCamera
+            ? [
+                {
+                  'source': 'CAMERA',
+                  'emotion': widget.cameraResult!.emotion,
+                  'confidence': widget.cameraResult!.confidence,
+                  'suggestedMood': null,
+                  'modelVersion': widget.cameraResult!.modelVersion,
+                },
+              ]
+            : null,
         intensity: _intensity.round(),
       );
     }
@@ -163,6 +184,27 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
     if (!mounted) return;
     setState(() => _saving = false);
 
+    // The controller swallows persistence errors into `error` — never
+    // navigate to the success screen when the write actually failed.
+    if (controller.error != null) {
+      AppSnackbar.show(context, controller.error!);
+      return;
+    }
+
+    // Persist the confirmed camera observation as an immutable emotion event.
+    // Independent store from the mood record above (no double-write of the
+    // mood itself); best-effort so event ingestion can never block or break
+    // the check-in flow.
+    if (hasCamera) {
+      await controller.recordEmotionEvent(
+        widget.cameraResult!.toEventMap(
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          idempotencyKey: _eventKey,
+        ),
+      );
+    }
+
+    if (!mounted) return;
     context.go('/mood-result', extra: {
       'moodId': _selected!.id,
       'analysisResult': analysis,
@@ -305,8 +347,9 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
                       const SizedBox(width: AppSpacing.sm),
                       Expanded(
                         child: Text(
-                          'Camera detected: ${widget.cameraResult!.emotion}'
-                          ' \u00b7 ${(widget.cameraResult!.confidence * 100).round()}% confidence',
+                          // Plain-language only: raw confidence percentages and
+                          // other model internals are never user-facing.
+                          'Camera reading added',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSecondaryContainer,
                           ),
@@ -339,6 +382,7 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
                 if (moodCtrl.analysisResult != null) {
                   final result = moodCtrl.analysisResult!;
                   final fusedMood = result['fused_mood'] as String?;
+                  final aiSuggestedMood = result['ai_suggested_mood'] as String?;
                   final confidence =
                       (result['confidence'] as num?)?.toDouble();
                   final sources =
@@ -373,8 +417,17 @@ class _RecordMoodScreenState extends State<RecordMoodScreen> {
                             const SizedBox(height: AppSpacing.sm),
                             if (fusedMood != null)
                               Text(
-                                'Suggested mood: ${fusedMood.replaceAll('_', ' ')}',
+                                'Saved mood: ${fusedMood.replaceAll('_', ' ')}',
                                 style: theme.textTheme.bodyMedium,
+                              ),
+                            if (aiSuggestedMood != null &&
+                                aiSuggestedMood != fusedMood)
+                              Text(
+                                'AI read: ${aiSuggestedMood.replaceAll('_', ' ')} '
+                                '(your selection is kept)',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
                               ),
                             if (confidence != null)
                               Text(

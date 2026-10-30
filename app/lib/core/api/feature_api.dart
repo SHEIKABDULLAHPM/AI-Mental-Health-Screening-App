@@ -3,13 +3,16 @@ import 'package:dio/dio.dart';
 import 'package:mindease/core/error/error_mapper.dart';
 import 'package:mindease/core/error/failures.dart';
 import 'package:mindease/core/network/dio_client.dart';
+import 'package:mindease/features/challenges/data/challenge_api.dart';
 import 'package:mindease/features/mood_tracking/presentation/state/mood_controller.dart';
+import 'package:mindease/features/physical_wellness/data/physical_wellness_api.dart';
 
 /// Thin client for every feature endpoint the controllers call.
 ///
 /// Follows the same envelope convention as [MindeaseApi]: every response is
 /// `{success, data}` and the inner `data` is unwrapped here.
-class FeatureApi implements MoodApi {
+class FeatureApi
+    implements MoodApi, ChallengeApi, PhysicalWellnessApi {
   FeatureApi(this._client);
 
   final DioClient _client;
@@ -54,7 +57,7 @@ class FeatureApi implements MoodApi {
       });
 
   @override
-  Future<void> recordMood({
+  Future<Map<String, dynamic>?> recordMood({
     required String mood,
     String? emotion,
     String? note,
@@ -65,7 +68,7 @@ class FeatureApi implements MoodApi {
     int? intensity,
   }) =>
       _guard(() async {
-        await _client.post<Map<String, dynamic>>(
+        final res = await _client.post<Map<String, dynamic>>(
           '/moods',
           data: {
             'mood': mood,
@@ -78,6 +81,24 @@ class FeatureApi implements MoodApi {
             if (intensity != null) 'intensity': intensity,
           },
         );
+        final payload = res.data?['data'];
+        if (payload is! Map<String, dynamic>) return null;
+        return payload;
+      });
+
+  /// Persist a confirmed on-device emotion observation.
+  /// POST /emotions/events — the backend validates, dedupes by idempotency
+  /// key and stores the immutable event.
+  @override
+  Future<Map<String, dynamic>> recordEmotionEvent(
+    Map<String, dynamic> event,
+  ) =>
+      _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/emotions/events',
+          data: event,
+        );
+        return _unwrapBody(res.data);
       });
 
   /// Analyze mood via the AI service (text emotion + camera fusion).
@@ -119,6 +140,16 @@ class FeatureApi implements MoodApi {
         final res = await _client.get<Map<String, dynamic>>(
           '/moods/trends/enhanced',
           query: {'days': days},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  /// Combined onboarding mood context (recent + trend + statistics) in one
+  /// round-trip, so onboarding prefill needs a single HTTP call.
+  @override
+  Future<Map<String, dynamic>> getOnboardingMoodSummary() => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/moods/onboarding-summary',
         );
         return _unwrapBody(res.data);
       });
@@ -381,6 +412,18 @@ class FeatureApi implements MoodApi {
 
   // ──────────────────────────────────────── Challenges
 
+  /// Aggregated payload for the Challenges home screen.
+  ///
+  /// Returns the raw home envelope map so the consumer can read `active`,
+  /// `completed`, `badges`, `currentStreak`, `pointsEarned` and `recommended`.
+  @override
+  Future<Map<String, dynamic>> getChallengeHome() => _guard(() async {
+        final res = await _client
+            .get<Map<String, dynamic>>('/challenges/home');
+        return _unwrapBody(res.data);
+      });
+
+  @override
   Future<List<Map<String, dynamic>>> getAvailableChallenges() =>
       _guard(() async {
         final res = await _client
@@ -388,33 +431,82 @@ class FeatureApi implements MoodApi {
         return _unwrapList(res.data);
       });
 
-  Future<List<Map<String, dynamic>>> getActiveChallenges() =>
-      _guard(() async {
-        final res =
-            await _client.get<Map<String, dynamic>>('/challenges/active');
-        return _unwrapList(res.data);
-      });
-
-  Future<List<Map<String, dynamic>>> getCompletedChallenges() =>
-      _guard(() async {
-        final res = await _client
-            .get<Map<String, dynamic>>('/challenges/completed');
-        return _unwrapList(res.data);
-      });
-
+  @override
   Future<Map<String, dynamic>> getChallenge(String id) => _guard(() async {
         final res = await _client
             .get<Map<String, dynamic>>('/challenges/$id');
         return _unwrapBody(res.data);
       });
 
-  Future<void> startChallenge(String id) => _guard(() async {
-        await _client.post<Map<String, dynamic>>('/challenges/$id/start');
+  @override
+  Future<Map<String, dynamic>> startChallenge(String id) => _guard(() async {
+        final res = await _client
+            .post<Map<String, dynamic>>('/challenges/$id/start');
+        return _unwrapBody(res.data);
       });
 
-  Future<void> updateChallengeProgress(String id) => _guard(() async {
-        await _client
-            .put<Map<String, dynamic>>('/challenges/user-challenges/$id/progress');
+  @override
+  Future<List<Map<String, dynamic>>> getBadges() => _guard(() async {
+        final res = await _client
+            .get<Map<String, dynamic>>('/challenges/badges');
+        return _unwrapList(res.data);
+      });
+
+  @override
+  Future<List<Map<String, dynamic>>> getChallengeHistory({
+    int page = 0,
+    int size = 20,
+  }) => _guard(() async {
+        final res = await _client
+            .get<Map<String, dynamic>>(
+              '/challenges/history',
+              query: {'page': page, 'size': size},
+            );
+        return _unwrapList(res.data);
+      });
+
+  @override
+  Future<List<Map<String, dynamic>>> getActiveProgress() =>
+      _guard(() async {
+        final res = await _client
+            .get<Map<String, dynamic>>('/challenges/progress');
+        return _unwrapList(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> submitGameResult({
+    required String challengeId,
+    required String gameType,
+    required int score,
+    required bool completed,
+    int moves = 0,
+    int durationSeconds = 0,
+    String? difficulty,
+  }) => _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/challenges/$challengeId/complete',
+          data: {
+            'gameType': gameType,
+            'score': score,
+            'completed': completed,
+            'moves': moves,
+            'durationSeconds': durationSeconds,
+            if (difficulty != null) 'difficulty': difficulty,
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> submitProgress({
+    required String challengeId,
+    required String sourceRecordId,
+  }) => _guard(() async {
+        final res = await _client.dio.post<Map<String, dynamic>>(
+          '/challenges/$challengeId/progress',
+          queryParameters: {'sourceRecordId': sourceRecordId},
+        );
+        return _unwrapBody(res.data);
       });
 
   // ──────────────────────────────────────── Recommendations
@@ -615,5 +707,334 @@ class FeatureApi implements MoodApi {
             if (metadata != null) 'metadata': metadata,
           },
         );
+      });
+
+  // ──────────────────────────────────────── Physical Wellness
+
+  @override
+  Future<Map<String, dynamic>> registerDevice({
+    required String provider,
+    required String deviceIdentifier,
+    String? manufacturer,
+    String? model,
+    String? firmwareVersion,
+    List<String>? capabilities,
+    int? batteryLevel,
+  }) =>
+      _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/wearables',
+          data: {
+            'provider': provider,
+            'deviceIdentifier': deviceIdentifier,
+            if (manufacturer != null) 'manufacturer': manufacturer,
+            if (model != null) 'model': model,
+            if (firmwareVersion != null) 'firmwareVersion': firmwareVersion,
+            if (capabilities != null) 'capabilities': capabilities,
+            if (batteryLevel != null) 'batteryLevel': batteryLevel,
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<List<Map<String, dynamic>>> listDevices() => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>('/wearables');
+        return _unwrapList(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> updateDeviceStatus(
+    String deviceId, {
+    int? batteryLevel,
+    bool? charging,
+    String? connectionStatus,
+    String? firmwareVersion,
+  }) =>
+      _guard(() async {
+        final res = await _client.put<Map<String, dynamic>>(
+          '/wearables/$deviceId/status',
+          data: {
+            if (batteryLevel != null) 'batteryLevel': batteryLevel,
+            if (charging != null) 'charging': charging,
+            if (connectionStatus != null)
+              'connectionStatus': connectionStatus,
+            if (firmwareVersion != null) 'firmwareVersion': firmwareVersion,
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<void> deleteDevice(String deviceId) => _guard(() async {
+        await _client.delete<Map<String, dynamic>>('/wearables/$deviceId');
+      });
+
+  @override
+  Future<Map<String, dynamic>> getPhysicalToday() => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>('/physical/today');
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getPhysicalActivity({int? days}) =>
+      _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/activity',
+          query: {if (days != null) 'days': days},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getPhysicalHeartRate({int? hours}) =>
+      _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/heart-rate',
+          query: {if (hours != null) 'hours': hours},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getPhysicalSleep({int? limit}) =>
+      _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/sleep',
+          query: {if (limit != null) 'limit': limit},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getPhysicalExercise({int? limit}) =>
+      _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/exercise',
+          query: {if (limit != null) 'limit': limit},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getPhysicalSummary() => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/summary',
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> syncPhysical(Map<String, dynamic> payload) =>
+      _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/physical/sync',
+          data: payload,
+        );
+        return _unwrapBody(res.data);
+      });
+
+  // ──────────────────────────────────────── Hydration
+
+  @override
+  Future<Map<String, dynamic>> getHydration({int? days}) => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/hydration',
+          query: {if (days != null) 'days': days},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> addHydration({
+    required double amount,
+    String? unit,
+    DateTime? timestamp,
+  }) =>
+      _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/physical/hydration',
+          data: {
+            'amount': amount,
+            if (unit != null) 'unit': unit,
+            if (timestamp != null)
+              'timestamp': timestamp.toUtc().toIso8601String(),
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> updateHydration(
+    String entryId, {
+    required double amount,
+    String? unit,
+    DateTime? timestamp,
+  }) =>
+      _guard(() async {
+        final res = await _client.put<Map<String, dynamic>>(
+          '/physical/hydration/$entryId',
+          data: {
+            'amount': amount,
+            if (unit != null) 'unit': unit,
+            if (timestamp != null)
+              'timestamp': timestamp.toUtc().toIso8601String(),
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<void> deleteHydration(String entryId) => _guard(() async {
+        await _client.delete<Map<String, dynamic>>(
+          '/physical/hydration/$entryId',
+        );
+      });
+
+  @override
+  Future<Map<String, dynamic>> updateHydrationTarget(int targetMl) =>
+      _guard(() async {
+        final res = await _client.put<Map<String, dynamic>>(
+          '/physical/hydration/target',
+          data: {'targetMl': targetMl},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  // ──────────────────────────────────────── Body measurements
+
+  @override
+  Future<Map<String, dynamic>> getBody({int? limit}) => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/body',
+          query: {if (limit != null) 'limit': limit},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> addBodyMeasurement({
+    double? weight,
+    double? height,
+    String? weightUnit,
+    String? heightUnit,
+    DateTime? measuredAt,
+  }) =>
+      _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/physical/body',
+          data: {
+            if (weight != null) 'weight': weight,
+            if (height != null) 'height': height,
+            if (weightUnit != null) 'weightUnit': weightUnit,
+            if (heightUnit != null) 'heightUnit': heightUnit,
+            if (measuredAt != null)
+              'measuredAt': measuredAt.toUtc().toIso8601String(),
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> updateBodyMeasurement(
+    String measurementId, {
+    double? weight,
+    double? height,
+    String? weightUnit,
+    String? heightUnit,
+    DateTime? measuredAt,
+  }) =>
+      _guard(() async {
+        final res = await _client.put<Map<String, dynamic>>(
+          '/physical/body/$measurementId',
+          data: {
+            if (weight != null) 'weight': weight,
+            if (height != null) 'height': height,
+            if (weightUnit != null) 'weightUnit': weightUnit,
+            if (heightUnit != null) 'heightUnit': heightUnit,
+            if (measuredAt != null)
+              'measuredAt': measuredAt.toUtc().toIso8601String(),
+          },
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<void> deleteBodyMeasurement(String measurementId) => _guard(() async {
+        await _client.delete<Map<String, dynamic>>(
+          '/physical/body/$measurementId',
+        );
+      });
+
+  // ──────────────────────────────────────── Goals, trends, insights
+
+  @override
+  Future<Map<String, dynamic>> getGoals() => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/goals',
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> updateGoals(Map<String, dynamic> targets) =>
+      _guard(() async {
+        final res = await _client.put<Map<String, dynamic>>(
+          '/physical/goals',
+          data: targets,
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> applyAiGoalRecommendations(
+          List<Map<String, dynamic>> recommendations) =>
+      _guard(() async {
+        final res = await _client.post<Map<String, dynamic>>(
+          '/physical/goals/ai-recommendations',
+          data: {'recommendations': recommendations},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getTrends({int? days}) => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/trends',
+          query: {if (days != null) 'days': days},
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> getInsights() => _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/physical/insights',
+        );
+        return _unwrapBody(res.data);
+      });
+
+  // ──────────────────────────────────────── Capability registry
+
+  @override
+  Future<Map<String, dynamic>> getCapabilities(String deviceId) =>
+      _guard(() async {
+        final res = await _client.get<Map<String, dynamic>>(
+          '/wearables/$deviceId/capabilities',
+        );
+        return _unwrapBody(res.data);
+      });
+
+  @override
+  Future<Map<String, dynamic>> reportCapabilities(
+    String deviceId,
+    List<Map<String, dynamic>> capabilities,
+  ) =>
+      _guard(() async {
+        final res = await _client.put<Map<String, dynamic>>(
+          '/wearables/$deviceId/capabilities',
+          data: {'capabilities': capabilities},
+        );
+        return _unwrapBody(res.data);
       });
 }

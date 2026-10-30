@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import com.mindease.backend.common.error.ApiException;
 import com.mindease.backend.common.error.ErrorCode;
+import com.mindease.backend.features.challenges.application.ChallengeActivityService;
 import com.mindease.backend.features.recommendations.domain.RecommendationContent;
 import com.mindease.backend.features.recommendations.domain.RecommendationContentRepository;
 import com.mindease.backend.features.recommendations.domain.RecommendationInteraction;
@@ -38,18 +39,21 @@ public class RecommendationService {
     private final RecommendationContextBuilder contextBuilder;
     private final RecommendationRankingService rankingService;
     private final PersonalizationService personalizationService;
+    private final ChallengeActivityService challengeActivityService;
 
     public RecommendationService(
             RecommendationContentRepository contentRepo,
             RecommendationInteractionRepository interactionRepo,
             RecommendationContextBuilder contextBuilder,
             RecommendationRankingService rankingService,
-            PersonalizationService personalizationService) {
+            PersonalizationService personalizationService,
+            ChallengeActivityService challengeActivityService) {
         this.contentRepo = contentRepo;
         this.interactionRepo = interactionRepo;
         this.contextBuilder = contextBuilder;
         this.rankingService = rankingService;
         this.personalizationService = personalizationService;
+        this.challengeActivityService = challengeActivityService;
     }
 
     /**
@@ -191,6 +195,11 @@ public class RecommendationService {
         String eventType = mapInteractionToPersonalizationEvent(type);
         personalizationService.recordFeedback(userId, eventType, contentId,
                 "recommendations", java.util.Map.of("interactionType", type));
+
+        // Advance any matching started healthy-routine challenges (fire-and-forget)
+        if ("COMPLETED".equals(type)) {
+            challengeActivityService.onRecommendationCompleted(userId, contentId, null);
+        }
     }
 
     // ── Seeding ──

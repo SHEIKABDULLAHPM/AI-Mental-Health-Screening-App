@@ -7,11 +7,6 @@ class ScreeningRequest(BaseModel):
     answers: dict[str, int] = Field(description="question_id -> score")
 
 
-class EmotionRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=20000)
-    language: str = "auto"
-
-
 class RiskRequest(BaseModel):
     screening_score: dict[str, float]
     contextual_flags: list[str] = Field(default_factory=list)

@@ -26,10 +26,15 @@ class TextAnalysisResponse(BaseModel):
 # ── Camera Facial Affect ─────────────────────────────────────────────
 
 class CameraObservationRequest(BaseModel):
-    """Structured camera facial affect observation (processed on-device)."""
+    """Structured camera facial affect observation (processed on-device).
+
+    The server performs NO vision inference: it re-labels, re-weights and
+    fuses the on-device result. model_version is the CLIENT's model
+    identity, echoed back after validation — never asserted by the server.
+    """
 
     dominant_emotion: str = Field(
-        description="Dominant facial emotion detected (e.g. neutral, happy, sad, angry, surprised)"
+        description="Dominant facial emotion detected (canonical synora-fer class or unknown)"
     )
     emotion_scores: dict[str, float] = Field(
         default_factory=dict,
@@ -41,6 +46,20 @@ class CameraObservationRequest(BaseModel):
     valence: float = Field(default=0.0, ge=-1.0, le=1.0, description="Facial affect valence")
     arousal: float = Field(default=0.0, ge=-1.0, le=1.0, description="Facial affect arousal")
     frames_analyzed: int = Field(default=1, ge=1, description="Number of frames analyzed")
+    status: str = Field(
+        default="PREDICTED",
+        description="On-device event status (PREDICTED, UNCERTAIN, or quality-gate status)",
+    )
+    calibrated_confidence: float | None = Field(
+        default=None, ge=0.0, le=1.0,
+        description="Device calibrated confidence; re-weighted server-side, never trusted raw",
+    )
+    model_version: str = Field(
+        default="unknown",
+        min_length=1,
+        max_length=64,
+        description="On-device model version reported by the client",
+    )
 
 
 class CameraObservationResponse(BaseModel):
@@ -51,6 +70,28 @@ class CameraObservationResponse(BaseModel):
     face_quality: float
     frames_analyzed: int
     model_version: str
+
+
+# ── Server-side Face Emotion (TFLite) ────────────────────────────────────
+
+class FaceEmotionResponse(BaseModel):
+    """Structured server-side facial emotion classification result.
+
+    Extends the camera response contract with per-class probabilities so the
+    existing fusion engine and clients keep working unchanged.
+    """
+
+    source: str = "CAMERA"
+    emotion: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    # Top-1 minus top-2 probability. Reported so a client can apply the same
+    # ambiguity rule the server used; an emotion is only named when BOTH the
+    # confidence and this margin clear their thresholds.
+    margin: float = Field(default=0.0, ge=0.0, le=1.0)
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    suggested_mood: str
+    model_version: str
+    analysis_version: str = "2.0"
 
 
 # ── Safety ───────────────────────────────────────────────────────────
@@ -83,7 +124,15 @@ class MoodAnalysisRequest(BaseModel):
 class MoodAnalysisResponse(BaseModel):
     """Structured multimodal mood analysis result."""
 
-    fused_mood: str
+    fused_mood: str = Field(
+        description="The mood of record. Equals the user's manual selection "
+        "when one was provided; the AI read is never substituted for it."
+    )
+    ai_suggested_mood: str | None = Field(
+        default=None,
+        description="Mood implied by the weighted AI blend. Reported "
+        "separately from fused_mood so disagreement stays visible.",
+    )
     fused_emotion: str
     confidence: float = Field(ge=0.0, le=1.0)
     sources_used: list[str]

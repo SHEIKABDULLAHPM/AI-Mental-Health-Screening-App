@@ -6,6 +6,9 @@ import 'package:mindease/core/network/dio_client.dart';
 import 'package:mindease/core/router/app_router.dart';
 import 'package:mindease/core/storage/app_preferences.dart';
 import 'package:mindease/features/onboarding/screening/screening_session.dart';
+import 'package:mindease/features/physical_wellness/data/physical_local_cache.dart';
+import 'package:mindease/features/physical_wellness/data/wearable_gateway.dart';
+import 'package:mindease/features/wellness_analysis/data/wellness_analysis_api.dart';
 
 /// Lightweight app-wide services shared by the onboarding and dashboard flows.
 final SessionStore sessionStore = SessionStore();
@@ -13,6 +16,11 @@ final DioClient dioClient = DioClient();
 final MindeaseApi mindeaseApi = MindeaseApi(dioClient);
 final FeatureApi featureApi = FeatureApi(dioClient);
 final MediaUploadService mediaUploadService = MediaUploadService(dioClient.dio);
+
+/// Physical Wellness: bridges to the native BLE layer (MethodChannel) and
+/// the SharedPreferences JSON cache backing offline reads + the sync queue.
+final WearableGateway wearableGateway = MethodChannelWearableGateway();
+final PhysicalLocalCache physicalLocalCache = PhysicalJsonCache();
 
 /// Wires up the DioClient session-expiry callback so that an expired or
 /// invalid refresh token immediately clears local state and forces the
@@ -59,3 +67,6 @@ Future<void> logout() async {
   // Never let a previous user's draft leak into the next sign-in.
   ScreeningSession.reset();
 }
+
+late final WellnessAnalysisApi wellnessAnalysisApi =
+    WellnessAnalysisApi(dioClient);

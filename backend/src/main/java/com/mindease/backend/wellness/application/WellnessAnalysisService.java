@@ -5,7 +5,9 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import com.mindease.backend.features.mood.application.MoodTrendAnalyzer;
 import com.mindease.backend.screening.domain.Lifestyle;
+import com.mindease.backend.screening.domain.MoodAssessment;
 import com.mindease.backend.screening.domain.Screening;
 
 /**
@@ -38,6 +40,144 @@ public class WellnessAnalysisService {
             int pss10,
             int who5,
             int whoPercent) {
+    }
+
+    /**
+     * Deterministic onboarding mood summary. The self-reported mood is the
+     * primary signal; the score is derived from the shared mood table and the
+     * trend/history come from existing mood records (never invented). The
+     * camera signal — when a linked mood entry carries a CAMERA AI
+     * observation — travels as supporting context only, with a deterministic
+     * agreement verdict that mirrors the Flutter interpretation so both
+     * layers can never disagree.
+     */
+    public record MoodSummary(
+            String mood,
+            String emotion,
+            Integer intensity,
+            Integer moodScore,
+            String trendDirection,
+            String trendDescription,
+            int historyCount,
+            String cameraEmotion,
+            Double cameraConfidence,
+            String cameraModelVersion,
+            String signalAgreement) {
+    }
+
+    /**
+     * Structured camera observation extracted from a linked mood entry.
+     * Null/absent fields mean "no usable camera signal" downstream.
+     */
+    public record CameraSignal(
+            String emotion,
+            Double confidence,
+            String modelVersion) {
+    }
+
+    /**
+     * Builds the mood summary for a screening. Returns null when the user did
+     * not provide an onboarding mood — callers must handle absence gracefully
+     * instead of inventing a mood.
+     */
+    public MoodSummary moodSummary(MoodAssessment mood,
+                                   java.util.Map<String, Object> trend,
+                                   int historyCount) {
+        return moodSummary(mood, trend, historyCount, null);
+    }
+
+    /**
+     * Builds the mood summary with an optional camera supporting signal.
+     * A null/absent/unknown camera signal yields {@code "noSignal"} — the
+     * self-report stands alone, exactly like a skipped camera step.
+     */
+    public MoodSummary moodSummary(MoodAssessment mood,
+                                   java.util.Map<String, Object> trend,
+                                   int historyCount,
+                                   CameraSignal camera) {
+        if (mood == null || mood.getCurrentMood() == null
+                || mood.getCurrentMood().isBlank()) {
+            return null;
+        }
+        String direction = trend != null && trend.get("direction") instanceof String s
+                ? s : "unknown";
+        String description = trend != null && trend.get("description") instanceof String s
+                ? s : "Not enough mood records to determine a trend.";
+        String camEmotion = camera != null ? camera.emotion() : null;
+        if (camEmotion != null && (camEmotion.isBlank() || "unknown".equalsIgnoreCase(camEmotion))) {
+            camEmotion = null;
+        }
+        Double camConfidence = camera != null ? camera.confidence() : null;
+        return new MoodSummary(
+                mood.getCurrentMood(),
+                mood.getEmotion(),
+                mood.getIntensity(),
+                MoodTrendAnalyzer.moodToValue(mood.getCurrentMood()),
+                direction,
+                description,
+                Math.max(historyCount, 0),
+                camEmotion,
+                camConfidence,
+                camera != null ? camera.modelVersion() : null,
+                cameraAgreement(mood.getCurrentMood(), camEmotion, camConfidence));
+    }
+
+    /**
+     * Deterministic camera-vs-self-report verdict. Mirrors the Flutter
+     * {@code cameraAgreement()} tables (canonical→mood map, valence scale,
+     * 0.30 confidence floor) so the stored verdict always matches what the
+     * onboarding UI displayed. Never overrides the self-report — it only
+     * labels the supporting signal.
+     */
+    public static String cameraAgreement(String userMoodId, String cameraEmotion, Double confidence) {
+        String mapped = mapCanonicalToMood(cameraEmotion);
+        if (mapped == null || confidence == null || confidence < 0.30) {
+            return "noSignal";
+        }
+        if (mapped.equals(userMoodId)) {
+            return "agree";
+        }
+        if (Math.abs(moodValence(mapped) - moodValence(userMoodId)) <= 0.3) {
+            return "close";
+        }
+        return "differs";
+    }
+
+    /**
+     * Canonical emotion → mood-scale id. Mirrors the AI-service fusion mood
+     * map and the Flutter interpretation table.
+     */
+    public static String mapCanonicalToMood(String canonical) {
+        if (canonical == null) {
+            return null;
+        }
+        return switch (canonical.toLowerCase()) {
+            case "happy" -> "happy";
+            case "neutral" -> "calm";
+            case "sad" -> "low";
+            case "anger", "fear" -> "stressed";
+            case "surprise" -> "okay";
+            case "disgust" -> "low";
+            default -> null;
+        };
+    }
+
+    /**
+     * Mood-scale valence. Mirrors the AI-service fusion valence table.
+     */
+    public static double moodValence(String moodId) {
+        if (moodId == null) {
+            return 0.0;
+        }
+        return switch (moodId) {
+            case "very_happy" -> 1.0;
+            case "happy" -> 0.7;
+            case "calm" -> 0.3;
+            case "okay" -> 0.0;
+            case "low" -> -0.5;
+            case "stressed" -> -0.8;
+            default -> 0.0;
+        };
     }
 
     public Scores scores(Screening screening) {

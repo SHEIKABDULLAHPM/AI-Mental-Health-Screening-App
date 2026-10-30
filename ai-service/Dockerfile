@@ -24,13 +24,31 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY app ./app
 COPY scripts ./scripts
-
-# Pre-download the sentence-transformers embedding model so RAG is fast on
-# first use and works without runtime network access (the model is cached in
-# the image under HF_HOME instead of being fetched from HuggingFace per boot).
+# The production emotion model (app/models/vit_fer_fp16.tflite, ViT-B/16
+# fp16, ~172 MB) ships inside the image via `COPY app` above;
+# EMOTION_MODEL_PATH defaults to app/models/vit_fer_fp16.tflite. No extra
+# packages beyond requirements.txt (ai-edge-litert + pillow + numpy) are
+# needed. NOTE: this file dominates the image size -- see
+# docs/fer-migration.md section 8 for the packaging options.
+# Pre-download every Hugging Face model the service loads so RAG *and* mood
+# text analysis are fast on first use and work without runtime network access
+# (the models are cached in the image under HF_HOME instead of being fetched
+# from HuggingFace per boot). Without this the first /mood/analyze request
+# blocked for minutes on two ~500 MB transformer downloads and always
+# exceeded the backend's 30 s timeout, silently dropping the user's note.
 ARG EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+ARG EMOTION_MODEL=j-hartmann/emotion-english-distilroberta-base
+ARG SENTIMENT_MODEL=cardiffnlp/twitter-roberta-base-sentiment-latest
 ENV HF_HOME=/app/model-cache
+# Xet-backed downloads stalled for minutes inside BuildKit on this host even
+# though plain HTTP downloads were fast. Plain HTTP keeps the image build
+# deterministic; the baked model files are identical either way.
+ENV HF_HUB_DISABLE_XET=1
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('$EMBEDDING_MODEL')" \
+    && python -c "\
+from transformers import pipeline; \
+pipeline('text-classification', model='$EMOTION_MODEL', top_k=None, truncation=True); \
+pipeline('text-classification', model='$SENTIMENT_MODEL', top_k=None, truncation=True)" \
     && rm -rf /app/model-cache/models--*/.cache 2>/dev/null || true
 
 RUN useradd --create-home --shell /bin/bash ai \

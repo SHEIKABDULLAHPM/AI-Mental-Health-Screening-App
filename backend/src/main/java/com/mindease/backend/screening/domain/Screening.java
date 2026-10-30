@@ -34,6 +34,19 @@ public class Screening {
     /** Questionnaire answers keyed by code, e.g. "phq9" -> [0,1,2,...]. */
     private Map<String, List<Integer>> assessments = new LinkedHashMap<>();
 
+    /**
+     * Optional onboarding mood assessment snapshot (user-provided only).
+     * Null for assessments created before the Mood Check-In integration or by
+     * older clients — always handled gracefully downstream.
+     */
+    private MoodAssessment mood;
+
+    /**
+     * Version of the questionnaire catalog the answers were given against.
+     * Stamped server-side so scores stay reproducible when the catalog evolves.
+     */
+    private String catalogVersion;
+
     private Instant startedAt;
 
     private Instant updatedAt;
@@ -95,8 +108,41 @@ public class Screening {
         return assessments;
     }
 
+    /**
+     * PHQ-9 item 9 screens for thoughts of being better off dead or of
+     * self-harm. Any non-zero response is a positive screen. This is a safety
+     * signal only: it never changes the wellness score and is not a diagnosis.
+     */
+    public boolean hasSelfHarmSignal() {
+        if (assessments == null) {
+            return false;
+        }
+        List<Integer> phq9 = assessments.get("phq9");
+        if (phq9 == null || phq9.size() < 9) {
+            return false;
+        }
+        Integer item9 = phq9.get(8);
+        return item9 != null && item9 > 0;
+    }
+
     public void setAssessments(Map<String, List<Integer>> assessments) {
         this.assessments = assessments;
+    }
+
+    public MoodAssessment getMood() {
+        return mood;
+    }
+
+    public void setMood(MoodAssessment mood) {
+        this.mood = mood;
+    }
+
+    public String getCatalogVersion() {
+        return catalogVersion;
+    }
+
+    public void setCatalogVersion(String catalogVersion) {
+        this.catalogVersion = catalogVersion;
     }
 
     public Instant getStartedAt() {

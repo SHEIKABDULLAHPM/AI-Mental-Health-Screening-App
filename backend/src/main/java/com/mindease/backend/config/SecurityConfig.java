@@ -66,6 +66,11 @@ public class SecurityConfig {
                                 "/actuator/health", "/actuator/health/**").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/v1/auth/**").permitAll()
+                        // Sealed media is fetched by media players and image
+                        // widgets that send no headers; it carries its own
+                        // short-lived per-object signature instead of a JWT.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/media/object")
+                        .permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(entryPoint)
